@@ -1,0 +1,2 @@
+"""Sprite Sheet Cleaner package."""
+
