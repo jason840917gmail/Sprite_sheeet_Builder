@@ -507,6 +507,22 @@ class SourceViewer(QGraphicsView):
             self.clear_selection()
             event.accept()
             return
+        if event.key() == Qt.Key_A:
+            self._pan_view_by_key(-1, 0)
+            event.accept()
+            return
+        if event.key() == Qt.Key_D:
+            self._pan_view_by_key(1, 0)
+            event.accept()
+            return
+        if event.key() == Qt.Key_W:
+            self._pan_view_by_key(0, -1)
+            event.accept()
+            return
+        if event.key() == Qt.Key_S:
+            self._pan_view_by_key(0, 1)
+            event.accept()
+            return
         if self._tool == "select":
             if event.key() == Qt.Key_Left:
                 self.nudge_selection(-1, 0)
@@ -559,6 +575,19 @@ class SourceViewer(QGraphicsView):
         self._pan_h_value = self.horizontalScrollBar().value()
         self._pan_v_value = self.verticalScrollBar().value()
         self.setCursor(Qt.ClosedHandCursor)
+
+    def _pan_view_by_key(self, dx: int, dy: int) -> None:
+        if not self.has_image():
+            return
+        visible = self.mapToScene(self.viewport().rect()).boundingRect()
+        step_x = max(visible.width() / 24.0, 1.0)
+        step_y = max(visible.height() / 24.0, 1.0)
+        if dx:
+            bar = self.horizontalScrollBar()
+            bar.setValue(int(bar.value() + dx * step_x))
+        if dy:
+            bar = self.verticalScrollBar()
+            bar.setValue(int(bar.value() + dy * step_y))
 
     def _start_grid_drag(self, event) -> None:
         if self._grid_spec is None:
@@ -950,9 +979,9 @@ class SourceViewer(QGraphicsView):
 
     def _tool_hint_text(self) -> str | None:
         if self._tool == "select":
-            return "Left click: place selection\nArrow keys: nudge 1px\nA: add to bucket\nEsc: clear selection"
+            return "Left click: place selection\nArrow keys: nudge 1px\nSpace: add to bucket\nEsc: clear selection\nWASD: pan view"
         if self._tool == "grid":
-            return "Left click: add tile\nLeft drag: select tiles\nRight-click drag: move grid\nArrow keys: nudge 1px"
+            return "Left click: add tile\nLeft drag: select tiles\nRight-click drag: move grid\nArrow keys: nudge 1px\nWASD: pan view"
         return None
 
     def _update_rulers(self) -> None:

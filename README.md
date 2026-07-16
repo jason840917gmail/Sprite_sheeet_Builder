@@ -45,10 +45,10 @@ pip install -r sprite_sheet_cleaner\requirements.txt
 1. Open a source image.
 2. Set the tile / selection size. Use `Sym` if you want width and height linked.
 3. Set Selection grid to `1 x 1` for one tile at a time, or increase it to select a tile block such as `1 x 2`.
-4. Use the Select tool to place the fixed-size selection box. In Select mode, left-click places the selection, arrow keys nudge it 1 pixel at a time, `A` adds it to the bucket, and `Esc` clears it.
+4. Use the Select tool to place the fixed-size selection box. In Select mode, left-click places the selection, arrow keys nudge it 1 pixel at a time, `Space` adds it to the bucket, and `Esc` clears it.
 5. Use the Grid tool to divide the source image into equal cells. If the image size is uneven, Grid rounds down and leaves leftover right/bottom pixels outside the clickable grid.
 6. In Grid mode, left-click individual cells to add them to the bucket, right-click and hold to drag the fitted grid within the image boundaries, or use the arrow keys to nudge the grid 1 pixel at a time.
-7. Use the Pointer tool to pan around the canvas. Switching to Pointer or Grid clears the current Select box.
+7. Use the Pointer tool to pan around the canvas. `WASD` also pans the view in any tool. Switching to Pointer or Grid clears the current Select box.
 8. The app auto-detects the background color when you open an image. Use `Detect` to re-sample from the current selection border when needed.
 9. Add tiles to the bucket. You can rename, duplicate, reorder, delete, or clear the bucket from the bucket panel.
 10. Adjust Final tilesheet rows and columns if the bucket needs more output slots.
