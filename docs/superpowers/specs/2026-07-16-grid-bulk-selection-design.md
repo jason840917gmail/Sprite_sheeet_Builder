@@ -17,12 +17,13 @@ Make large source grids practical to use without changing the existing fast sing
 - A new drag replaces the previous pending Grid-tool selection. A non-drag click clears any previous pending selection before adding its single cell.
 - Escape and Clear Selection clear pending selections in both Select and Grid modes.
 - A successful pending-selection bulk add clears that selection. A duplicate-only result or failure leaves it selected so the user can correct capacity or settings and retry.
-- Changing tools, moving or rebuilding the grid, editing tile dimensions, or replacing the source image clears a pending Grid-tool selection because its cell coordinates are no longer reliable.
+- Changing tools, moving the grid, rebuilding it because its geometry changed, editing tile dimensions, or replacing the source image clears a pending Grid-tool selection because its cell coordinates are no longer reliable.
+- Non-geometric settings changes, including final-sheet rows/columns and processing options, do not rebuild grid geometry and preserve a pending selection so a failed capacity check can be corrected and retried.
 
 ### Add All
 
 - Add an `Add All` button immediately beside `Add Selection to Bucket`.
-- The button is available only when the Grid tool is active, a valid source grid exists, and the bucket has capacity.
+- The button is hidden outside Grid mode. In Grid mode it is visible but disabled when the grid is invalid or no bucket capacity remains, and visible and enabled otherwise.
 - Activating it considers every cell in the current grid in row-major order.
 - Cells already represented in the bucket by the same source rectangle are skipped.
 - Bulk additions are atomic. If the number of new cells exceeds remaining final-sheet capacity, show a warning stating the required and available slots and add nothing.
@@ -55,6 +56,7 @@ Make large source grids practical to use without changing the existing fast sing
 - Expose all current grid-cell rectangles for Add All.
 - Continue emitting the existing single-cell signal only for a click, never for a classified drag.
 - Clear pending grid selection when the grid becomes invalid, moves, or the active tool changes.
+- Rebuild grid geometry only when its inputs (source image, tile dimensions, or grid origin) change; selection-matrix, final-sheet, and image-processing settings must not invalidate a pending Grid selection.
 
 ### `SettingsPanel`
 
