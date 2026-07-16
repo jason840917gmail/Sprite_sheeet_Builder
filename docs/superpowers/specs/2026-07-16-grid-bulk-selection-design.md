@@ -42,11 +42,13 @@ Make large source grids practical to use without changing the existing fast sing
 - Add a `Match Grid` checkbox on the `Final tilesheet` row beside the final columns and rows.
 - When checked, `sheet_columns` and `sheet_rows` equal the complete painted Grid-tool layout's calculated columns and rows. For example, a viewer status of `Ready 19 x 19` produces a `19 x 19` final tilesheet.
 - The painted layout is calculated from source-image dimensions and tile dimensions. Loading another source image or changing tile size recalculates the painted grid and updates final dimensions while matching remains checked.
+- Moving the painted grid origin changes cell rectangles but never its columns or rows, so it does not change matched final dimensions.
 - While checked, the final columns and rows controls are disabled to communicate that they are derived values.
 - The checkbox never follows the Select tool's configured `Selection grid` values. A configured `1 x 1` Selection grid does not override a painted `19 x 19` grid.
 - The checkbox never follows a temporary Grid-tool drag selection. A 5 x 3 drag does not change final-sheet dimensions.
 - When unchecked, final columns and rows retain their current synchronized values and become independently editable.
 - Persist the boolean in `AppSettings` and project JSON. Loading older projects without the field defaults it to false.
+- Project JSON created by the mistaken implementation may contain `match_sheet_to_selection`. On load, if the corrected `match_sheet_to_grid` field is absent, migrate the legacy boolean to `match_sheet_to_grid` and remove the legacy key before constructing `AppSettings`. A legacy true value therefore enables matching to the painted Grid, not the Select matrix. If both keys exist, the corrected field wins.
 - Because `AppSettings` does not own source-image dimensions, `MainWindow` owns synchronization. It obtains the calculated dimensions from `SourceViewer`, updates both model settings and panel controls without recursive signals, and refreshes capacity/preview state.
 - If matching is checked while no valid painted grid exists, preserve the last valid final dimensions and keep the final controls locked. Synchronize as soon as a valid source image and tile size produce a grid.
 - If project JSON says matching is true but contains dimensions that differ from the painted grid, keep the stored values only until the source image loads; then the painted-grid dimensions win.
@@ -124,6 +126,9 @@ Make large source grids practical to use without changing the existing fast sing
 - UI-test that a `19 x 19` painted grid produces a `19 x 19` final tilesheet even when Selection grid is `1 x 1`.
 - UI-test that tile-size and source-image changes recalculate matched dimensions, while drag-selection and Selection-grid changes do not.
 - Unit-test that older project settings default to unmatched and that matching state persists without making `AppSettings` derive from Selection grid.
+- Unit-test legacy project migration for `match_sheet_to_selection` false and true, plus precedence when both legacy and corrected fields exist.
+- UI-test invalid-grid lifecycle: check Match Grid with no valid grid, invalidate a previously matched grid, preserve the last valid dimensions with locked controls, and synchronize automatically when the grid becomes valid again.
+- UI-test capacity shrink and recovery: existing tiles remain, overflow preview remains available, add/export safeguards remain active, and unmatching/increasing capacity or removing tiles restores normal operation.
 - Unit-test the shared bulk path's duplicate filtering before capacity calculation, last-added selection result, duplicate-only no-op, and capacity failure with no mutation.
 - Unit-test `ProjectModel` atomic multi-add by forcing a later crop to fail and asserting that no tiles or names were committed.
 - UI-test Add All action state after tool changes, image/grid validity changes, settings rebuilds, and bucket capacity changes.
