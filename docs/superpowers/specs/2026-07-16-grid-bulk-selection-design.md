@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make large source grids practical to use without changing the existing fast single-cell workflow. Users must be able to add every grid cell at once, drag a rectangular pending selection, and optionally keep the final tilesheet dimensions synchronized with the Select tool's configured selection grid.
+Make large source grids practical to use without changing the existing fast single-cell workflow. Users must be able to add every grid cell at once, drag a rectangular pending selection, and optionally keep the final tilesheet dimensions synchronized with the full painted Grid-tool layout calculated from the source image and tile size.
 
 ## Interaction Design
 
@@ -37,15 +37,19 @@ Make large source grids practical to use without changing the existing fast sing
 - This visibility affects presentation only; the configured selection columns and rows remain stored.
 - `Add Selection to Bucket` remains available in Select and Grid modes because both modes can produce a pending selection. Existing behavior outside those modes is unchanged.
 
-### Match selection grid
+### Match painted grid
 
-- Add a `Match selection grid` checkbox on the `Final tilesheet` row beside the final columns and rows.
-- When checked, `sheet_columns` equals `selection_columns` and `sheet_rows` equals `selection_rows` immediately and after every subsequent selection-grid edit.
+- Add a `Match Grid` checkbox on the `Final tilesheet` row beside the final columns and rows.
+- When checked, `sheet_columns` and `sheet_rows` equal the complete painted Grid-tool layout's calculated columns and rows. For example, a viewer status of `Ready 19 x 19` produces a `19 x 19` final tilesheet.
+- The painted layout is calculated from source-image dimensions and tile dimensions. Loading another source image or changing tile size recalculates the painted grid and updates final dimensions while matching remains checked.
 - While checked, the final columns and rows controls are disabled to communicate that they are derived values.
-- The checkbox never follows a temporary Grid-tool drag selection. A 5 x 3 drag does not change either configured selection-grid dimensions or final-sheet dimensions.
+- The checkbox never follows the Select tool's configured `Selection grid` values. A configured `1 x 1` Selection grid does not override a painted `19 x 19` grid.
+- The checkbox never follows a temporary Grid-tool drag selection. A 5 x 3 drag does not change final-sheet dimensions.
 - When unchecked, final columns and rows retain their current synchronized values and become independently editable.
 - Persist the boolean in `AppSettings` and project JSON. Loading older projects without the field defaults it to false.
-- `AppSettings.validated()` owns the invariant: when matching is true, it normalizes final columns and rows to selection columns and rows. `SettingsPanel.settings()` and project loading both pass through this boundary. If saved JSON says matching is true but contains mismatched dimensions, the selection-grid dimensions win and the controls display the normalized values.
+- Because `AppSettings` does not own source-image dimensions, `MainWindow` owns synchronization. It obtains the calculated dimensions from `SourceViewer`, updates both model settings and panel controls without recursive signals, and refreshes capacity/preview state.
+- If matching is checked while no valid painted grid exists, preserve the last valid final dimensions and keep the final controls locked. Synchronize as soon as a valid source image and tile size produce a grid.
+- If project JSON says matching is true but contains dimensions that differ from the painted grid, keep the stored values only until the source image loads; then the painted-grid dimensions win.
 - Synchronization is allowed to reduce capacity below the current bucket count. Existing tiles are never deleted. The preview continues to show overflow using the existing overflow-tolerant path, additions remain disabled, and export remains unavailable with the existing capacity warning until the user increases capacity or removes tiles.
 
 ## Component Responsibilities
@@ -55,15 +59,16 @@ Make large source grids practical to use without changing the existing fast sing
 - Own pointer gesture classification, grid drag anchor/current cells, and the pending Grid-tool selection overlay.
 - Expose the exact pending grid-cell rectangles in row-major order.
 - Expose all current grid-cell rectangles for Add All.
+- Expose the calculated painted-grid dimensions as `(columns, rows)` when valid and no value when invalid.
 - Continue emitting the existing single-cell signal only for a click, never for a classified drag.
 - Clear pending grid selection when the grid becomes invalid, moves, or the active tool changes.
 - Rebuild grid geometry only when its inputs (source image, tile dimensions, or grid origin) change; selection-matrix, final-sheet, and image-processing settings must not invalidate a pending Grid selection.
 
 ### `SettingsPanel`
 
-- Own the new Add All button, the match checkbox, synchronized spin-box state, and tool-dependent row visibility.
+- Own the new Add All button, the `Match Grid` checkbox, synchronized spin-box presentation, and tool-dependent row visibility.
 - Emit a dedicated Add All request.
-- Include the synchronization boolean and derived dimensions when producing settings.
+- Include the synchronization boolean and currently displayed final dimensions when producing settings.
 - Update controls without recursive settings-change signals when loading or synchronizing values.
 - Accept current action context from `MainWindow` and derive Add All visibility/enabled state from active tool, grid validity, and remaining capacity.
 
@@ -74,12 +79,13 @@ Make large source grids practical to use without changing the existing fast sing
 - Route Add All to the viewer's complete current grid rectangle list.
 - Apply duplicate filtering, capacity validation, atomic tile creation, refresh, selection, and status messages for bulk operations through one shared helper.
 - After a successful bulk add, select the last newly added tile. Duplicate-only and failed operations preserve the current bucket selection.
+- When matching is enabled, copy `SourceViewer`'s painted-grid dimensions into model settings and panel controls after source-image loads, project loads, checkbox changes, and tile-dimension changes.
 
 ### `AppSettings`
 
-- Add `match_sheet_to_selection: bool = False`.
+- Add `match_sheet_to_grid: bool = False`.
 - Preserve backward-compatible loading through the dataclass default when the JSON field is absent.
-- Normalize synchronized dimensions in `validated()` so every validated consumer sees the same invariant.
+- Continue validating stored final dimensions but do not derive them from Selection grid; painted-grid derivation requires the viewer/source-image context owned by `MainWindow`.
 
 ### `ProjectModel`
 
@@ -94,7 +100,7 @@ Make large source grids practical to use without changing the existing fast sing
 4. Add Selection asks the viewer for those exact rectangles and passes them to the shared bulk-add helper.
 5. Add All asks the viewer for every current grid rectangle and uses the same helper.
 6. The helper removes rectangles already in the bucket before calculating required capacity, validates remaining capacity, asks `ProjectModel` to construct all new tiles atomically, and refreshes the UI once.
-7. Settings changes synchronize final dimensions before emitting `AppSettings`, so model capacity and preview always see a consistent state.
+7. When matching is checked, `MainWindow` reads the full painted-grid dimensions from `SourceViewer`, writes them to model settings and panel controls, then refreshes capacity and preview state.
 
 ## Error and Edge Handling
 
@@ -106,6 +112,7 @@ Make large source grids practical to use without changing the existing fast sing
 - Capacity and processing failures are atomic; partial bulk additions are not allowed.
 - Existing projects remain loadable and default to independent final-sheet dimensions.
 - If matching produces capacity smaller than the existing bucket, keep all tiles and use the existing overflow preview/export safeguards.
+- If the painted grid is invalid, keep the last valid matched dimensions and synchronize automatically when it becomes valid again.
 
 ## Verification
 
@@ -113,8 +120,10 @@ Make large source grids practical to use without changing the existing fast sing
 - UI-test that a click still emits one grid cell while a drag creates a pending selection without emitting additions.
 - UI-test Add Selection for Grid mode, duplicate skipping, atomic capacity failure, and Add All.
 - UI-test Selection grid row visibility for Select, Grid, and Pointer tools.
-- UI-test checked synchronization, disabled final controls, unchecking behavior, and project-setting round trips.
-- Unit-test that settings validation normalizes inconsistent matched dimensions on project load and leaves older unmatched projects unchanged.
+- UI-test checked painted-grid synchronization, disabled final controls, unchecking behavior, and project-setting round trips.
+- UI-test that a `19 x 19` painted grid produces a `19 x 19` final tilesheet even when Selection grid is `1 x 1`.
+- UI-test that tile-size and source-image changes recalculate matched dimensions, while drag-selection and Selection-grid changes do not.
+- Unit-test that older project settings default to unmatched and that matching state persists without making `AppSettings` derive from Selection grid.
 - Unit-test the shared bulk path's duplicate filtering before capacity calculation, last-added selection result, duplicate-only no-op, and capacity failure with no mutation.
 - Unit-test `ProjectModel` atomic multi-add by forcing a later crop to fail and asserting that no tiles or names were committed.
 - UI-test Add All action state after tool changes, image/grid validity changes, settings rebuilds, and bucket capacity changes.
@@ -126,4 +135,5 @@ Make large source grids practical to use without changing the existing fast sing
 - Free-form or non-rectangular multi-selection.
 - Modifier-key toggling of individual cells.
 - Making temporary Grid drag dimensions change the Select tool's configured matrix.
+- Making the Select tool's configured matrix or a temporary Grid drag determine matched final-sheet dimensions.
 - Changing the established colors, overall layout, or bucket ordering model.
