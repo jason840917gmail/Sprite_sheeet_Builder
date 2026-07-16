@@ -13,10 +13,14 @@ from PIL import Image
 try:
     from PySide6.QtWidgets import QApplication, QMessageBox
     from sprite_sheet_cleaner.app.main_window import MainWindow
+    from sprite_sheet_cleaner.app.models.app_settings import AppSettings
+    from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 except ImportError:
     QApplication = None
     QMessageBox = None
     MainWindow = None
+    AppSettings = None
+    pil_to_qimage = None
 
 
 @unittest.skipUnless(QApplication is not None and MainWindow is not None, "PySide6 is not installed")
@@ -80,6 +84,144 @@ class MainWindowTests(unittest.TestCase):
             self.assertEqual(len(window.model.tiles), 0)
             self.assertEqual(window.bucket_panel.list_widget.count(), 0)
             self.assertFalse(window.bucket_panel.clear_button.isEnabled())
+        finally:
+            window.close()
+
+    def _grid_window(
+        self,
+        *,
+        sheet_columns: int = 2,
+        sheet_rows: int = 2,
+        image_size: tuple[int, int] = (4, 4),
+        tile_size: int = 2,
+        match_sheet_to_grid: bool = False,
+    ) -> MainWindow:
+        window = MainWindow()
+        window.source_image = Image.new("RGBA", image_size, (255, 0, 0, 255))
+        window.model.settings = AppSettings(
+            tile_width=tile_size,
+            tile_height=tile_size,
+            sheet_columns=sheet_columns,
+            sheet_rows=sheet_rows,
+            match_sheet_to_grid=match_sheet_to_grid,
+            remove_background=False,
+        )
+        window.settings_panel.set_settings(window.model.settings)
+        window._apply_selection_geometry()
+        window.source_viewer.set_image(pil_to_qimage(window.source_image))
+        window._sync_sheet_to_grid()
+        window._set_viewer_tool("grid")
+        window._refresh_all()
+        return window
+
+    def test_add_all_adds_each_grid_cell_and_skips_existing_tiles(self) -> None:
+        window = self._grid_window()
+        try:
+            window.model.add_tile_from_crop(window.source_image, (0, 0, 2, 2))
+            window._refresh_all()
+
+            window._add_all_grid_cells()
+
+            self.assertEqual(
+                [tile.source_rect for tile in window.model.tiles],
+                [(0, 0, 2, 2), (2, 0, 2, 2), (0, 2, 2, 2), (2, 2, 2, 2)],
+            )
+        finally:
+            window.close()
+
+    def test_add_all_capacity_failure_adds_nothing(self) -> None:
+        window = self._grid_window(sheet_columns=1, sheet_rows=2)
+        try:
+            with patch("sprite_sheet_cleaner.app.main_window.QMessageBox.warning") as warning:
+                window._add_all_grid_cells()
+
+            self.assertEqual(window.model.tiles, [])
+            warning.assert_called_once()
+            self.assertIn("requires 4 empty slots", warning.call_args.args[2])
+        finally:
+            window.close()
+
+    def test_grid_drag_selection_adds_on_request_then_clears(self) -> None:
+        window = self._grid_window()
+        try:
+            window.source_viewer._set_grid_selection_range((0, 0), (1, 0))
+
+            window._add_selection_to_bucket()
+
+            self.assertEqual([tile.source_rect for tile in window.model.tiles], [(0, 0, 2, 2), (2, 0, 2, 2)])
+            self.assertEqual(window.source_viewer.selected_grid_rects(), [])
+        finally:
+            window.close()
+
+    def test_grid_drag_never_changes_matched_final_sheet_dimensions(self) -> None:
+        window = self._grid_window(
+            sheet_columns=1,
+            sheet_rows=1,
+            image_size=(38, 38),
+            tile_size=2,
+            match_sheet_to_grid=True,
+        )
+        try:
+            window.model.settings.selection_columns = 1
+            window.model.settings.selection_rows = 1
+            window.settings_panel.set_settings(window.model.settings)
+
+            self.assertEqual(window.source_viewer.grid_dimensions(), (19, 19))
+            self.assertEqual((window.model.settings.sheet_columns, window.model.settings.sheet_rows), (19, 19))
+
+            window.source_viewer._set_grid_selection_range((0, 0), (1, 1))
+
+            self.assertEqual(len(window.source_viewer.selected_grid_rects()), 4)
+            self.assertEqual((window.model.settings.sheet_columns, window.model.settings.sheet_rows), (19, 19))
+            self.assertEqual((window.settings_panel.sheet_columns.value(), window.settings_panel.sheet_rows.value()), (19, 19))
+        finally:
+            window.close()
+
+    def test_match_grid_preserves_last_size_while_invalid_then_resynchronizes(self) -> None:
+        window = self._grid_window(match_sheet_to_grid=True)
+        try:
+            self.assertEqual((window.model.settings.sheet_columns, window.model.settings.sheet_rows), (2, 2))
+
+            window.settings_panel.tile_width.setValue(8)
+            self.assertIsNone(window.source_viewer.grid_dimensions())
+            self.assertEqual((window.model.settings.sheet_columns, window.model.settings.sheet_rows), (2, 2))
+            self.assertFalse(window.settings_panel.sheet_columns.isEnabled())
+
+            window.settings_panel.tile_width.setValue(1)
+            self.assertEqual(window.source_viewer.grid_dimensions(), (4, 4))
+            self.assertEqual((window.model.settings.sheet_columns, window.model.settings.sheet_rows), (4, 4))
+        finally:
+            window.close()
+
+    def test_match_grid_capacity_shrink_preserves_tiles_and_can_recover(self) -> None:
+        window = self._grid_window(
+            sheet_columns=4,
+            sheet_rows=4,
+            tile_size=1,
+            match_sheet_to_grid=True,
+        )
+        try:
+            window._add_all_grid_cells()
+            self.assertEqual(len(window.model.tiles), 16)
+
+            window.settings_panel.tile_width.setValue(2)
+
+            self.assertEqual((window.model.settings.sheet_columns, window.model.settings.sheet_rows), (2, 2))
+            self.assertEqual(len(window.model.tiles), 16)
+            self.assertIn("Overflow: 12", window.final_preview.info_label.text())
+            self.assertFalse(window.settings_panel.add_button.isEnabled())
+            self.assertFalse(window.settings_panel.add_all_button.isEnabled())
+
+            with patch("sprite_sheet_cleaner.app.main_window.QMessageBox.warning") as warning:
+                window._export_sheet()
+            warning.assert_called_once()
+
+            window.settings_panel.match_sheet_to_grid.setChecked(False)
+            window.settings_panel.sheet_columns.setValue(5)
+            window.settings_panel.sheet_rows.setValue(4)
+
+            self.assertNotIn("Overflow:", window.final_preview.info_label.text())
+            self.assertTrue(window.settings_panel.add_button.isEnabled())
         finally:
             window.close()
 

@@ -6,6 +6,7 @@ from typing import Literal
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QGraphicsPathItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -204,6 +205,11 @@ class SourceViewer(QGraphicsView):
         self._dragging_grid = False
         self._grid_drag_scene_origin = QPointF()
         self._grid_drag_start_origin = (0, 0)
+        self._grid_selecting = False
+        self._grid_select_dragging = False
+        self._grid_select_press_pos = QPoint()
+        self._grid_select_anchor_cell: tuple[int, int] | None = None
+        self._grid_selection_range: tuple[int, int, int, int] | None = None
         self._placing_selection = False
         self._panning = False
         self._pan_origin = QPoint()
@@ -242,9 +248,9 @@ class SourceViewer(QGraphicsView):
     def set_tool(self, tool: ViewerTool) -> None:
         if tool not in ("pointer", "select", "grid"):
             raise ValueError(f"Unknown source viewer tool: {tool}")
-        self._tool = tool
-        if tool != "select" and self._selection_item.isVisible():
+        if tool != self._tool:
             self.clear_selection()
+        self._tool = tool
         self._update_cursor()
         self._rebuild_grid()
         self._update_tool_hint()
@@ -257,12 +263,17 @@ class SourceViewer(QGraphicsView):
         selection_columns: int = 1,
         selection_rows: int = 1,
     ) -> None:
-        self._tile_size = (max(1, int(tile_width)), max(1, int(tile_height)))
+        next_tile_size = (max(1, int(tile_width)), max(1, int(tile_height)))
+        tile_size_changed = next_tile_size != self._tile_size
+        self._tile_size = next_tile_size
         self._selection_grid_size = (max(1, int(selection_columns)), max(1, int(selection_rows)))
-        if self._selection_item.isVisible():
+        if tile_size_changed and self._grid_selection_range is not None:
+            self.clear_selection()
+        if self._tool == "select" and self._selection_item.isVisible():
             rect = self._fixed_rect_from_top_left(self._selection_item.rect().topLeft())
             self._set_selection_rect(rect)
-        self._rebuild_grid()
+        if tile_size_changed:
+            self._rebuild_grid()
 
     def set_fixed_selection_size(self, width: int, height: int) -> None:
         self.set_selection_geometry(width, height, *self._selection_grid_size)
@@ -281,6 +292,33 @@ class SourceViewer(QGraphicsView):
 
     def grid_origin(self) -> tuple[int, int]:
         return self._grid_origin
+
+    def grid_is_valid(self) -> bool:
+        return self._grid_spec is not None
+
+    def grid_dimensions(self) -> tuple[int, int] | None:
+        if self._grid_spec is None:
+            return None
+        return self._grid_spec.columns, self._grid_spec.rows
+
+    def all_grid_rects(self) -> list[tuple[int, int, int, int]]:
+        if self._grid_spec is None:
+            return []
+        return [
+            cell_rect(self._grid_spec, column, row, self._grid_origin)
+            for row in range(self._grid_spec.rows)
+            for column in range(self._grid_spec.columns)
+        ]
+
+    def selected_grid_rects(self) -> list[tuple[int, int, int, int]]:
+        if self._grid_spec is None or self._grid_selection_range is None:
+            return []
+        left, top, right, bottom = self._grid_selection_range
+        return [
+            cell_rect(self._grid_spec, column, row, self._grid_origin)
+            for row in range(top, bottom + 1)
+            for column in range(left, right + 1)
+        ]
 
     def nudge_selection(self, dx: int, dy: int) -> None:
         if not self._selection_item.isVisible():
@@ -316,6 +354,10 @@ class SourceViewer(QGraphicsView):
         self._update_tool_hint()
 
     def clear_selection(self) -> None:
+        self._grid_selecting = False
+        self._grid_select_dragging = False
+        self._grid_select_anchor_cell = None
+        self._grid_selection_range = None
         self._selection_item.setRect(QRectF())
         self._selection_item.setVisible(False)
         self._selection_grid_item.setPath(QPainterPath())
@@ -380,7 +422,7 @@ class SourceViewer(QGraphicsView):
             if self._tool == "pointer":
                 self._start_pan(event)
             elif self._tool == "grid":
-                self._click_grid_cell(self._event_pos(event))
+                self._start_grid_selection(self._event_pos(event))
             else:
                 self._placing_selection = True
                 self._place_fixed_selection(self._event_pos(event))
@@ -409,6 +451,11 @@ class SourceViewer(QGraphicsView):
             event.accept()
             return
 
+        if self._grid_selecting:
+            self._update_grid_selection_drag(self._event_pos(event))
+            event.accept()
+            return
+
         if self._dragging_grid:
             self._drag_grid(self._event_pos(event))
             event.accept()
@@ -429,6 +476,11 @@ class SourceViewer(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._grid_selecting:
+            self._finish_grid_selection(self._event_pos(event))
+            event.accept()
+            return
+
         if event.button() == Qt.LeftButton and self._placing_selection:
             self._placing_selection = False
             self.selectionChanged.emit(self.selection_rect())
@@ -518,6 +570,74 @@ class SourceViewer(QGraphicsView):
         self._set_grid_hover_cell(None)
         self.setCursor(Qt.ClosedHandCursor)
 
+    def _start_grid_selection(self, point: QPoint) -> None:
+        if self._grid_spec is None:
+            self.gridStatusChanged.emit(self._grid_error)
+            return
+        anchor = self._grid_cell_at_point(point)
+        if anchor is None:
+            return
+        self._grid_selecting = True
+        self._grid_select_dragging = False
+        self._grid_select_press_pos = QPoint(point)
+        self._grid_select_anchor_cell = anchor
+        self._set_grid_hover_cell(anchor)
+
+    def _update_grid_selection_drag(self, point: QPoint) -> None:
+        if self._grid_select_anchor_cell is None:
+            return
+        if not self._grid_select_dragging:
+            distance = (point - self._grid_select_press_pos).manhattanLength()
+            if distance < QApplication.startDragDistance():
+                return
+            self._grid_select_dragging = True
+        current = self._grid_cell_at_point(point, clamp=True)
+        if current is not None:
+            self._set_grid_selection_range(self._grid_select_anchor_cell, current)
+
+    def _finish_grid_selection(self, point: QPoint) -> None:
+        anchor = self._grid_select_anchor_cell
+        was_dragging = self._grid_select_dragging
+        if was_dragging and anchor is not None:
+            current = self._grid_cell_at_point(point, clamp=True)
+            if current is not None:
+                self._set_grid_selection_range(anchor, current)
+        self._grid_selecting = False
+        self._grid_select_dragging = False
+        self._grid_select_anchor_cell = None
+
+        if was_dragging:
+            self.selectionChanged.emit(self.selection_rect())
+            return
+
+        self.clear_selection()
+        if anchor is not None and self._grid_spec is not None:
+            self._set_grid_hover_cell(anchor)
+            self.gridCellClicked.emit(cell_rect(self._grid_spec, anchor[0], anchor[1], self._grid_origin))
+
+    def _grid_cell_at_point(self, point: QPoint, *, clamp: bool = False) -> tuple[int, int] | None:
+        if self._grid_spec is None:
+            return None
+        scene_point = self.mapToScene(point)
+        x = scene_point.x()
+        y = scene_point.y()
+        if clamp:
+            origin_x, origin_y = self._grid_origin
+            x = min(max(x, origin_x), origin_x + self._grid_spec.grid_width - 0.001)
+            y = min(max(y, origin_y), origin_y + self._grid_spec.grid_height - 0.001)
+        return cell_at_point(self._grid_spec, (x, y), self._grid_origin)
+
+    def _set_grid_selection_range(self, anchor: tuple[int, int], current: tuple[int, int]) -> None:
+        if self._grid_spec is None:
+            return
+        left, right = sorted((anchor[0], current[0]))
+        top, bottom = sorted((anchor[1], current[1]))
+        self._grid_selection_range = (left, top, right, bottom)
+        x, y, _, _ = cell_rect(self._grid_spec, left, top, self._grid_origin)
+        width = (right - left + 1) * self._grid_spec.tile_width
+        height = (bottom - top + 1) * self._grid_spec.tile_height
+        self._set_selection_rect(QRectF(x, y, width, height))
+
     def _drag_grid(self, point: QPoint) -> None:
         if self._grid_spec is None:
             return
@@ -578,7 +698,11 @@ class SourceViewer(QGraphicsView):
 
         rect = self._selection_item.rect().normalized()
         tile_width, tile_height = self._tile_size
-        columns, rows = self._selection_grid_size
+        if self._tool == "grid" and self._grid_selection_range is not None:
+            left, top, right, bottom = self._grid_selection_range
+            columns, rows = right - left + 1, bottom - top + 1
+        else:
+            columns, rows = self._selection_grid_size
 
         for column in range(1, columns):
             x = rect.left() + column * tile_width
@@ -650,6 +774,8 @@ class SourceViewer(QGraphicsView):
         next_origin = clamp_grid_origin(self._grid_spec, origin)
         if next_origin == self._grid_origin:
             return
+        if self._grid_selection_range is not None:
+            self.clear_selection()
         self._grid_origin = next_origin
         self._grid_item.setPath(self._grid_path(self._grid_spec, self._grid_origin))
         self._grid_outline_item.setRect(
@@ -826,7 +952,7 @@ class SourceViewer(QGraphicsView):
         if self._tool == "select":
             return "Left click: place selection\nArrow keys: nudge 1px\nA: add to bucket\nEsc: clear selection"
         if self._tool == "grid":
-            return "Left click: add tile\nRight-click drag: move grid\nArrow keys: nudge 1px"
+            return "Left click: add tile\nLeft drag: select tiles\nRight-click drag: move grid\nArrow keys: nudge 1px"
         return None
 
     def _update_rulers(self) -> None:

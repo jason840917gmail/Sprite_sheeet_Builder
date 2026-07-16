@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -39,6 +40,56 @@ class ProjectModelTests(unittest.TestCase):
         self.assertEqual([tile.source_rect for tile in added], [(0, 0, 2, 2), (0, 2, 2, 2)])
         self.assertEqual(added[0].image_rgba.getpixel((0, 0)), (255, 0, 0, 255))
         self.assertEqual(added[1].image_rgba.getpixel((0, 0)), (0, 0, 255, 255))
+
+    def test_add_tiles_from_rects_is_atomic_when_processing_fails(self) -> None:
+        source = Image.new("RGBA", (4, 2), (255, 0, 0, 255))
+        model = ProjectModel(settings=AppSettings(tile_width=2, tile_height=2, remove_background=False))
+
+        with patch(
+            "sprite_sheet_cleaner.app.core.project_model.process_crop",
+            side_effect=[Image.new("RGBA", (2, 2)), RuntimeError("processing failed")],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "processing failed"):
+                model.add_tiles_from_rects(source, [(0, 0, 2, 2), (2, 0, 2, 2)])
+
+        self.assertEqual(model.tiles, [])
+
+    def test_legacy_true_match_setting_migrates_without_using_selection_dimensions(self) -> None:
+        settings = AppSettings.from_dict(
+            {
+                "selection_columns": 5,
+                "selection_rows": 3,
+                "sheet_columns": 9,
+                "sheet_rows": 8,
+                "match_sheet_to_selection": True,
+            }
+        )
+
+        self.assertTrue(settings.match_sheet_to_grid)
+        self.assertEqual((settings.sheet_columns, settings.sheet_rows), (9, 8))
+
+    def test_corrected_match_setting_wins_over_legacy_field(self) -> None:
+        settings = AppSettings.from_dict(
+            {
+                "match_sheet_to_selection": True,
+                "match_sheet_to_grid": False,
+            }
+        )
+
+        self.assertFalse(settings.match_sheet_to_grid)
+
+    def test_old_project_settings_keep_independent_sheet_dimensions(self) -> None:
+        settings = AppSettings.from_dict(
+            {
+                "selection_columns": 5,
+                "selection_rows": 3,
+                "sheet_columns": 9,
+                "sheet_rows": 8,
+            }
+        )
+
+        self.assertFalse(settings.match_sheet_to_grid)
+        self.assertEqual((settings.sheet_columns, settings.sheet_rows), (9, 8))
 
 
 if __name__ == "__main__":

@@ -114,7 +114,9 @@ class MainWindow(QMainWindow):
         self.grid_action = QAction(create_grid_icon(), "Grid", self)
         self.grid_action.setCheckable(True)
         self.grid_action.setShortcut("G")
-        self.grid_action.setToolTip("Grid: left-click a tile; right-drag the grid; arrow keys nudge 1 px")
+        self.grid_action.setToolTip(
+            "Grid: left-click a tile; left-drag to select tiles; right-drag the grid; arrow keys nudge 1 px"
+        )
         self.tool_group.addAction(self.pointer_action)
         self.tool_group.addAction(self.select_action)
         self.tool_group.addAction(self.grid_action)
@@ -186,11 +188,12 @@ class MainWindow(QMainWindow):
         self.source_viewer.cursorPositionChanged.connect(self._set_mouse_status)
         self.source_viewer.selectionChanged.connect(self._set_selection_status)
         self.source_viewer.zoomChanged.connect(self._set_zoom_status)
-        self.source_viewer.toolChanged.connect(lambda _: self._update_status())
+        self.source_viewer.toolChanged.connect(self._viewer_tool_changed)
         self.source_viewer.gridCellClicked.connect(self._add_grid_cell_to_bucket)
-        self.source_viewer.gridStatusChanged.connect(lambda _: self._update_status())
+        self.source_viewer.gridStatusChanged.connect(self._grid_status_changed)
         self.settings_panel.settingsChanged.connect(self._settings_changed)
         self.settings_panel.addSelectionRequested.connect(self._add_selection_to_bucket)
+        self.settings_panel.addAllRequested.connect(self._add_all_grid_cells)
         self.settings_panel.detectBackgroundRequested.connect(self._detect_background_color)
         self.bucket_panel.deleteRequested.connect(self._delete_tile)
         self.bucket_panel.clearRequested.connect(self._clear_bucket)
@@ -221,6 +224,7 @@ class MainWindow(QMainWindow):
         if clear_tiles:
             self.model.clear_tiles()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
+        self._sync_sheet_to_grid()
         self._last_selection = None
         self._refresh_all()
         detected_color = self._detect_background_color_for_current_image(show_error_dialog=False)
@@ -282,6 +286,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.set_settings(self.model.settings)
         self._apply_selection_geometry()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
+        self._sync_sheet_to_grid()
         self._last_selection = None
         self._refresh_all()
         self.statusBar().showMessage(f"Loaded project {project_path.name}")
@@ -289,6 +294,7 @@ class MainWindow(QMainWindow):
     def _settings_changed(self, settings: AppSettings) -> None:
         self.model.settings = settings
         self._apply_selection_geometry()
+        self._sync_sheet_to_grid()
         if self.source_image is not None and self.model.tiles:
             try:
                 self.model.reprocess_tiles(self.source_image)
@@ -299,6 +305,18 @@ class MainWindow(QMainWindow):
     def _add_selection_to_bucket(self) -> None:
         if self.source_image is None:
             QMessageBox.warning(self, "Add selection", "Open a source image first.")
+            return
+
+        if self.source_viewer.current_tool() == "grid":
+            rects = self.source_viewer.selected_grid_rects()
+            if not rects:
+                QMessageBox.warning(
+                    self,
+                    "Add selection",
+                    "Drag across grid cells first, then add the selection to the bucket.",
+                )
+                return
+            self._add_grid_rects_to_bucket(rects, "grid selection", clear_selection_on_success=True)
             return
 
         if self._bucket_is_full():
@@ -337,6 +355,64 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Added tile {added_tiles[0].name}")
         else:
             self.statusBar().showMessage(f"Added {len(added_tiles)} tiles from selection")
+
+    def _add_all_grid_cells(self) -> None:
+        rects = self.source_viewer.all_grid_rects()
+        if not rects:
+            QMessageBox.warning(
+                self,
+                "Add all",
+                self.source_viewer.grid_status_message() or "No valid grid is available.",
+            )
+            return
+        self._add_grid_rects_to_bucket(rects, "grid")
+
+    def _add_grid_rects_to_bucket(
+        self,
+        rects: list[tuple[int, int, int, int]],
+        description: str,
+        *,
+        clear_selection_on_success: bool = False,
+    ) -> None:
+        if self.source_image is None:
+            QMessageBox.warning(self, "Add grid tiles", "Open a source image first.")
+            return
+
+        existing_rects = {tile.source_rect for tile in self.model.tiles}
+        new_rects: list[tuple[int, int, int, int]] = []
+        seen = set(existing_rects)
+        for rect in rects:
+            normalized = tuple(int(value) for value in rect)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            new_rects.append(normalized)
+
+        if not new_rects:
+            self.statusBar().showMessage(f"All tiles in this {description} are already in the bucket.")
+            return
+
+        capacity = sheet_capacity(self.model.settings)
+        available_slots = max(0, capacity - len(self.model.tiles))
+        if len(new_rects) > available_slots:
+            QMessageBox.warning(
+                self,
+                "Bucket full",
+                f"This {description} requires {len(new_rects)} empty slots, but the final tilesheet has "
+                f"{available_slots}. Increase rows or columns before adding.",
+            )
+            return
+
+        try:
+            added_tiles = self.model.add_tiles_from_rects(self.source_image, new_rects)
+        except Exception as exc:
+            QMessageBox.critical(self, "Add grid tiles failed", str(exc))
+            return
+
+        if clear_selection_on_success:
+            self.source_viewer.clear_selection()
+        self._refresh_all(selected_index=len(self.model.tiles) - 1)
+        self.statusBar().showMessage(f"Added {len(added_tiles)} tiles from {description}.")
 
     def _add_grid_cell_to_bucket(self, rect: tuple[int, int, int, int]) -> None:
         if self.source_image is None:
@@ -500,6 +576,15 @@ class MainWindow(QMainWindow):
             self._warn_if_grid_unavailable()
         else:
             self.select_action.setChecked(True)
+        self._refresh_action_context()
+        self._update_status()
+
+    def _viewer_tool_changed(self, _tool: str) -> None:
+        self._refresh_action_context()
+        self._update_status()
+
+    def _grid_status_changed(self, _status: object) -> None:
+        self._refresh_action_context()
         self._update_status()
 
     def _apply_selection_geometry(self) -> None:
@@ -510,6 +595,20 @@ class MainWindow(QMainWindow):
             settings.selection_columns,
             settings.selection_rows,
         )
+
+    def _sync_sheet_to_grid(self) -> bool:
+        settings = self.model.settings
+        if not settings.match_sheet_to_grid:
+            return False
+        dimensions = self.source_viewer.grid_dimensions()
+        if dimensions is None:
+            return False
+        columns, rows = dimensions
+        changed = (settings.sheet_columns, settings.sheet_rows) != (columns, rows)
+        settings.sheet_columns = columns
+        settings.sheet_rows = rows
+        self.settings_panel.set_matched_sheet_dimensions(columns, rows)
+        return changed
 
     def _warn_if_grid_unavailable(self) -> None:
         grid_status = self.source_viewer.grid_status_message()
@@ -523,7 +622,17 @@ class MainWindow(QMainWindow):
         self.source_viewer.set_grid_added_rects([tile.source_rect for tile in self.model.tiles])
         sheet = build_sheet(self.model.tiles, self.model.settings, allow_overflow=True)
         self.final_preview.set_preview(sheet, len(self.model.tiles), self.model.settings)
+        self._refresh_action_context()
         self._update_status()
+
+    def _refresh_action_context(self) -> None:
+        capacity = sheet_capacity(self.model.settings)
+        self.settings_panel.set_action_context(
+            self.source_viewer.current_tool(),
+            self.source_viewer.grid_is_valid(),
+            len(self.model.tiles),
+            capacity,
+        )
 
     def _bucket_is_full(self) -> bool:
         return len(self.model.tiles) >= sheet_capacity(self.model.settings)
@@ -573,7 +682,7 @@ class MainWindow(QMainWindow):
         grid_status = self.source_viewer.grid_status_message()
         grid = f" | Grid: {grid_status}" if self.source_viewer.current_tool() == "grid" and grid_status else ""
         if self.source_viewer.current_tool() == "grid":
-            hint = " | Left click tile; right-drag grid; arrows nudge 1px"
+            hint = " | Left click tile; left-drag select; A add selection; right-drag grid; arrows nudge 1px"
         elif self.source_viewer.current_tool() == "select":
             hint = " | Left click selection; arrows nudge 1px; A add; Esc clear"
         else:

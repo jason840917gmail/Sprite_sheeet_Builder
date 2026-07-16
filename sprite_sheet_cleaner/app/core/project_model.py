@@ -92,9 +92,24 @@ class ProjectModel:
         )
 
     def add_tiles_from_selection(self, source_image: Image.Image, crop_rect: CropRect) -> list[TileItem]:
+        return self.add_tiles_from_rects(source_image, self.selection_grid_rects(source_image, crop_rect))
+
+    def add_tiles_from_rects(self, source_image: Image.Image, crop_rects: list[CropRect]) -> list[TileItem]:
         items: list[TileItem] = []
-        for tile_rect in self.selection_grid_rects(source_image, crop_rect):
-            items.append(self.add_tile_from_crop(source_image, tile_rect))
+        start_index = len(self.tiles)
+        for offset, crop_rect in enumerate(crop_rects):
+            normalized_rect = clamp_crop_rect(source_image, crop_rect)
+            image = process_crop(source_image, normalized_rect, self.settings)
+            items.append(
+                TileItem(
+                    name=f"tile_{start_index + offset + 1:03d}",
+                    source_rect=normalized_rect,
+                    source_size=(normalized_rect[2], normalized_rect[3]),
+                    final_size=(self.settings.tile_width, self.settings.tile_height),
+                    image_rgba=image,
+                )
+            )
+        self.tiles.extend(items)
         return items
 
     def remove_tile(self, index: int) -> None:

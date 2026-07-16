@@ -20,6 +20,7 @@ class AppSettings:
     selection_rows: int = 1
     sheet_columns: int = 8
     sheet_rows: int = 8
+    match_sheet_to_grid: bool = False
     remove_background: bool = True
     background_color: tuple[int, int, int] = (255, 0, 255)
     tolerance: int = 30
@@ -57,6 +58,9 @@ class AppSettings:
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "AppSettings":
         values = dict(data)
+        legacy_match = values.pop("match_sheet_to_selection", None)
+        if "match_sheet_to_grid" not in values and legacy_match is not None:
+            values["match_sheet_to_grid"] = bool(legacy_match)
         if "background_color" in values:
             color = values["background_color"]
             if not isinstance(color, (list, tuple)) or len(color) != 3:

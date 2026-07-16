@@ -24,6 +24,7 @@ from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 class SettingsPanel(QWidget):
     settingsChanged = Signal(object)
     addSelectionRequested = Signal()
+    addAllRequested = Signal()
     detectBackgroundRequested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -53,6 +54,9 @@ class SettingsPanel(QWidget):
         self.sheet_rows.setMaximumWidth(72)
         self.sheet_columns.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.sheet_rows.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.match_sheet_to_grid = QCheckBox("Match Grid")
+        self.match_sheet_to_grid.setToolTip("Match final tilesheet columns and rows to the full painted Grid")
+        self.match_sheet_to_grid.setAccessibleName("Match painted grid")
         self.remove_background = QCheckBox()
         self.remove_background.setChecked(True)
         self.color_button = QPushButton()
@@ -76,6 +80,8 @@ class SettingsPanel(QWidget):
         self.anchor.addItem("Center", "center")
         self.anchor.addItem("Bottom-center", "bottom-center")
         self.add_button = QPushButton("Add Selection to Bucket")
+        self.add_all_button = QPushButton("Add All")
+        self.add_all_button.setToolTip("Add every cell in the current Grid tool layout")
 
         tolerance_row = QHBoxLayout()
         tolerance_row.setContentsMargins(0, 0, 0, 0)
@@ -91,7 +97,8 @@ class SettingsPanel(QWidget):
         tile_size_row.addWidget(self.tile_height)
         tile_size_row.addStretch(1)
 
-        selection_grid_row = QHBoxLayout()
+        self.selection_grid_field = QWidget()
+        selection_grid_row = QHBoxLayout(self.selection_grid_field)
         selection_grid_row.setContentsMargins(0, 0, 0, 0)
         selection_grid_row.setSpacing(6)
         selection_grid_row.addWidget(self.selection_columns)
@@ -105,7 +112,14 @@ class SettingsPanel(QWidget):
         final_tilesheet_row.addWidget(self.sheet_columns)
         final_tilesheet_row.addWidget(QLabel("x"))
         final_tilesheet_row.addWidget(self.sheet_rows)
+        final_tilesheet_row.addWidget(self.match_sheet_to_grid)
         final_tilesheet_row.addStretch(1)
+
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, 0, 0, 0)
+        add_row.setSpacing(6)
+        add_row.addWidget(self.add_button, 1)
+        add_row.addWidget(self.add_all_button)
 
         color_row = QHBoxLayout()
         color_row.setContentsMargins(0, 0, 0, 0)
@@ -120,7 +134,8 @@ class SettingsPanel(QWidget):
         form.setVerticalSpacing(8)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.addRow("Tile / selection size", tile_size_row)
-        form.addRow("Selection grid", selection_grid_row)
+        form.addRow("Selection grid", self.selection_grid_field)
+        self._selection_grid_label = form.labelForField(self.selection_grid_field)
         form.addRow("Remove background", self.remove_background)
         form.addRow("Background color", color_row)
         form.addRow("Tolerance", tolerance_row)
@@ -143,15 +158,16 @@ class SettingsPanel(QWidget):
         title.setStyleSheet("font-weight: 600;")
         layout.addWidget(title)
         layout.addLayout(form)
-        layout.addWidget(self.add_button)
+        layout.addLayout(add_row)
         layout.addLayout(final_form)
         layout.addStretch(1)
 
         self._update_color_button()
         self._connect_signals()
+        self.set_action_context("select", False, 0, 64)
 
     def settings(self) -> AppSettings:
-        return AppSettings(
+        settings = AppSettings(
             tile_width=self.tile_width.value(),
             tile_height=self.tile_height.value(),
             lock_tile_aspect=self.lock_tile_aspect.isChecked(),
@@ -159,6 +175,7 @@ class SettingsPanel(QWidget):
             selection_rows=self.selection_rows.value(),
             sheet_columns=self.sheet_columns.value(),
             sheet_rows=self.sheet_rows.value(),
+            match_sheet_to_grid=self.match_sheet_to_grid.isChecked(),
             remove_background=self.remove_background.isChecked(),
             background_color=self._background_color,
             tolerance=self.tolerance_spin.value(),
@@ -167,8 +184,10 @@ class SettingsPanel(QWidget):
             padding=self.padding.value(),
             anchor=self.anchor.currentData(),
         ).validated()
+        return settings
 
     def set_settings(self, settings: AppSettings) -> None:
+        settings.validated()
         self._updating = True
         self.tile_width.setValue(settings.tile_width)
         self.tile_height.setValue(settings.tile_height)
@@ -177,6 +196,7 @@ class SettingsPanel(QWidget):
         self.selection_rows.setValue(settings.selection_rows)
         self.sheet_columns.setValue(settings.sheet_columns)
         self.sheet_rows.setValue(settings.sheet_rows)
+        self.match_sheet_to_grid.setChecked(settings.match_sheet_to_grid)
         self.remove_background.setChecked(settings.remove_background)
         self._background_color = settings.background_color
         self.tolerance_slider.setValue(settings.tolerance)
@@ -188,6 +208,7 @@ class SettingsPanel(QWidget):
         anchor_index = self.anchor.findData(settings.anchor)
         self.anchor.setCurrentIndex(max(anchor_index, 0))
         self._update_color_button()
+        self._update_sheet_match_state()
         self._updating = False
 
     def set_detected_background_color(self, color: tuple[int, int, int], *, minimum_tolerance: int = 64) -> None:
@@ -209,6 +230,23 @@ class SettingsPanel(QWidget):
             self.add_button.setEnabled(True)
             self.add_button.setText("Add Selection to Bucket")
 
+    def set_action_context(self, tool: str, grid_valid: bool, tile_count: int, capacity: int) -> None:
+        select_visible = tool == "select"
+        self.selection_grid_field.setVisible(select_visible)
+        if self._selection_grid_label is not None:
+            self._selection_grid_label.setVisible(select_visible)
+
+        grid_active = tool == "grid"
+        self.add_all_button.setVisible(grid_active)
+        self.add_all_button.setEnabled(grid_active and grid_valid and tile_count < capacity)
+
+    def set_matched_sheet_dimensions(self, columns: int, rows: int) -> None:
+        was_updating = self._updating
+        self._updating = True
+        self.sheet_columns.setValue(max(1, int(columns)))
+        self.sheet_rows.setValue(max(1, int(rows)))
+        self._updating = was_updating
+
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
@@ -219,12 +257,11 @@ class SettingsPanel(QWidget):
         self.color_button.clicked.connect(self._choose_color)
         self.detect_color_button.clicked.connect(self.detectBackgroundRequested.emit)
         self.add_button.clicked.connect(self.addSelectionRequested.emit)
+        self.add_all_button.clicked.connect(self.addAllRequested.emit)
         self.tolerance_slider.valueChanged.connect(self.tolerance_spin.setValue)
         self.tolerance_spin.valueChanged.connect(self.tolerance_slider.setValue)
 
         for control in (
-            self.selection_columns,
-            self.selection_rows,
             self.sheet_columns,
             self.sheet_rows,
             self.tolerance_slider,
@@ -242,6 +279,9 @@ class SettingsPanel(QWidget):
         self.tile_width.valueChanged.connect(self._tile_width_changed)
         self.tile_height.valueChanged.connect(self._tile_height_changed)
         self.lock_tile_aspect.toggled.connect(self._tile_lock_toggled)
+        self.selection_columns.valueChanged.connect(self._selection_grid_changed)
+        self.selection_rows.valueChanged.connect(self._selection_grid_changed)
+        self.match_sheet_to_grid.toggled.connect(self._sheet_match_toggled)
 
     def _choose_color(self) -> None:
         current = QColor(*self._background_color)
@@ -273,6 +313,18 @@ class SettingsPanel(QWidget):
             source_value = self.tile_width.value() if self._last_tile_dimension == "width" else self.tile_height.value()
             self._sync_tile_dimensions(self._last_tile_dimension, source_value)
         self._emit_settings_changed()
+
+    def _selection_grid_changed(self, _value: int) -> None:
+        self._emit_settings_changed()
+
+    def _sheet_match_toggled(self, _checked: bool) -> None:
+        self._update_sheet_match_state()
+        self._emit_settings_changed()
+
+    def _update_sheet_match_state(self) -> None:
+        editable = not self.match_sheet_to_grid.isChecked()
+        self.sheet_columns.setEnabled(editable)
+        self.sheet_rows.setEnabled(editable)
 
     def _sync_tile_dimensions(self, changed: str, value: int) -> None:
         if self._updating or not self.lock_tile_aspect.isChecked():
