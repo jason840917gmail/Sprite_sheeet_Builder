@@ -32,7 +32,8 @@ Make large source grids practical to use without changing the existing fast sing
 
 ### Contextual settings
 
-- The `Selection grid` property row is visible only while the Select tool is active. It is hidden for Pointer and Grid tools.
+- In the right-side Settings panel, the entire `Selection grid` property row (label, columns field, `x`, and rows field) is shown only while the Select tool is active.
+- Switching to the Grid or Pointer tool removes that row from view. The Grid tool must not show Selection grid settings because its grid size comes from the source image and tile dimensions, not the Select tool's matrix.
 - This visibility affects presentation only; the configured selection columns and rows remain stored.
 - `Add Selection to Bucket` remains available in Select and Grid modes because both modes can produce a pending selection. Existing behavior outside those modes is unchanged.
 
