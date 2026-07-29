@@ -33,16 +33,18 @@ You can also use the root launcher:
 
 ## Basic Workflow
 
-1. Open a PNG, JPG, or WebP source sheet.
-2. Set the tile / selection size, such as `256 x 256`. Enable `Sym` to link width and height together.
-3. Set Selection grid to `1 x 1` for one tile at a time, or increase it to select a tile block such as `1 x 2`.
-4. Use the Select tool to place that fixed-size selection box on the source image.
-5. Use the Pointer tool to pan around the working canvas.
-6. Add the selection to the bucket.
-7. Adjust Final tilesheet rows and columns if the bucket needs more output slots.
-8. Reorder, rename, duplicate, delete, or clear bucket tiles.
-9. Preview the final sheet.
-10. Export the sprite sheet PNG, or export individual tile PNGs.
+1. Open a PNG, JPG, WebP, or supported video source.
+2. For video, choose a frame range and sampling interval, extract candidate thumbnails, and select the frames to keep. Open more videos to create one tab per video; the bucket and output sheet are shared across tabs.
+3. In the dedicated Video Tool panel, set the frame output size such as `64 x 64`, choose Fit, Stretch, or Fill/Crop, and configure background removal. These options are applied when frames enter the bucket.
+4. Left-click a frame thumbnail to select and add it to the bucket; right-click it to deselect and remove it from the bucket.
+5. Set `Seed animation frames` (10 by default) and use `Seed Animation` for a quick starting set of chronologically ordered random frames distributed across the video. Change the count when the action needs fewer or more poses.
+6. Video mode uses full frames and does not use the image workflow's Tile/Selection size, Selection grid, or Grid tool.
+7. Use the Pointer tool to pan around the working canvas.
+8. Add selected frames to the bucket when needed; individual left-clicks already add immediately.
+9. Drag bucket items to reorder them, or use the bucket controls to rename, duplicate, delete, or clear tiles.
+10. Adjust final tilesheet rows and columns in the Video Tool panel if the bucket needs more output slots.
+11. Preview the sheet inline or open the larger modal Animation Preview. In video mode it plays only the selected frames from the active video tab, preserving their bucket order.
+12. Export the sprite sheet PNG, individual tile PNGs, or frame metadata JSON. Saved projects restore multi-video tabs, sampling controls, selected candidates, and video output settings.
 
 The default workflow does not resize, trim, or pad selected tiles. A fixed `256 x 256` selection exports as a `256 x 256` tile. Background removal can still be enabled when the source sheet uses a solid color background.
 
@@ -69,8 +71,8 @@ Margins: 0
 
 ## Known Limitations
 
-The tool does not automatically detect every tile. Complex backgrounds may not remove perfectly. Semi-transparent shadows may need manual adjustment. AI assets with inconsistent perspective may still need manual editing. Large images may use a lot of memory.
+The tool does not automatically detect every tile. Complex backgrounds may not remove perfectly. Semi-transparent shadows may need manual adjustment. AI assets with inconsistent perspective may still need manual editing. Large images and long videos may use a lot of memory. Video codec support depends on the OpenCV build installed on the machine.
 
 ## Roadmap
 
-MVP work focuses on manual crop, bucket, background removal, fixed tile canvas, final sheet preview, and PNG export. Later work can add richer project management, undo/redo, recent files, multiple buckets, Godot metadata, and installer packaging.
+MVP work focuses on manual crop, bucket, background removal, fixed tile canvas, final sheet preview, and PNG export. Video frame extraction, frame selection, animation preview, and metadata export are now supported. Later work can add richer project management, undo/redo, recent files, multiple buckets, Godot metadata, and installer packaging.

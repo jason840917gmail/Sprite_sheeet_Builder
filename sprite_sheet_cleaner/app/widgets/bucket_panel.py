@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Signal, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -17,6 +18,22 @@ from sprite_sheet_cleaner.app.models.tile_item import TileItem
 from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 
 
+class _BucketListWidget(QListWidget):
+    orderChanged = Signal(object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+
+    def dropEvent(self, event) -> None:
+        super().dropEvent(event)
+        order = [self.item(row).data(Qt.UserRole) for row in range(self.count())]
+        self.orderChanged.emit(order)
+
+
 class BucketPanel(QWidget):
     clearRequested = Signal()
     deleteRequested = Signal(int)
@@ -24,11 +41,13 @@ class BucketPanel(QWidget):
     moveUpRequested = Signal(int)
     moveDownRequested = Signal(int)
     renameRequested = Signal(int)
+    reorderRequested = Signal(object)
+    tileClicked = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._capacity: int | None = None
-        self.list_widget = QListWidget()
+        self.list_widget = _BucketListWidget()
         self.list_widget.setIconSize(QSize(56, 56))
         self.list_widget.setAlternatingRowColors(True)
 
@@ -71,6 +90,10 @@ class BucketPanel(QWidget):
         self.down_button.clicked.connect(lambda: self.moveDownRequested.emit(self.current_index()))
         self.delete_button.clicked.connect(lambda: self.deleteRequested.emit(self.current_index()))
         self.clear_button.clicked.connect(self.clearRequested.emit)
+        self.list_widget.orderChanged.connect(self.reorderRequested.emit)
+        self.list_widget.itemClicked.connect(
+            lambda item: self.tileClicked.emit(self.list_widget.row(item))
+        )
         self.list_widget.currentRowChanged.connect(lambda _: self._update_buttons())
         self._update_buttons()
 
@@ -95,6 +118,7 @@ class BucketPanel(QWidget):
                 Qt.SmoothTransformation,
             )
             item = QListWidgetItem(QIcon(thumbnail), self._label_for_tile(index, tile))
+            item.setData(Qt.UserRole, index - 1)
             self.list_widget.addItem(item)
 
         if tiles:

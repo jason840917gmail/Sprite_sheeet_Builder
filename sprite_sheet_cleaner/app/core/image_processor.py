@@ -4,6 +4,8 @@ from PIL import Image
 import numpy as np
 
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
+from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
+from sprite_sheet_cleaner.app.core.frame_resizer import resize_frame
 
 
 CropRect = tuple[int, int, int, int]
@@ -111,6 +113,29 @@ def process_crop(
 
     if settings.trim_transparent:
         crop = trim_transparent_edges(crop)
+
+    crop = scale_to_settings(crop, settings)
+    return place_on_tile_canvas(crop, settings)
+
+
+def process_crop_with_resize(
+    source_image: Image.Image,
+    crop_rect: CropRect,
+    settings: AppSettings,
+    resize_settings: FrameResizeSettings | None = None,
+) -> Image.Image:
+    """Process a crop and optionally resize it to an exact intermediate frame canvas."""
+    settings.validated()
+    crop = crop_source_image(source_image, crop_rect)
+
+    if settings.remove_background:
+        crop = remove_background_color(crop, settings.background_color, settings.tolerance)
+
+    if settings.trim_transparent:
+        crop = trim_transparent_edges(crop)
+
+    if resize_settings is not None:
+        crop = resize_frame(crop, resize_settings)
 
     crop = scale_to_settings(crop, settings)
     return place_on_tile_canvas(crop, settings)
