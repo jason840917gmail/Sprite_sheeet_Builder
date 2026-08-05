@@ -14,14 +14,21 @@ class SourceProcessingService:
         self.repository = repository
         self.engines = dict(engines)
 
-    def create_candidate(self, settings: object, *, engine_id: str | None = None):
+    def create_candidate(
+        self,
+        settings: object,
+        *,
+        engine_id: str | None = None,
+        progress=None,
+        cancelled=None,
+    ):
         selected_id = engine_id or str(getattr(settings, "engine", "exact_key"))
         try:
             engine = self.engines[selected_id]
         except KeyError as exc:
             raise ValueError(f"Background engine is not available: {selected_id}") from exc
         source = self.repository.original_image()
-        result = engine.remove(source, settings)
+        result = engine.remove(source, settings, progress=progress, cancelled=cancelled)
         processed = apply_matte(source, result)
         settings_data = dict(getattr(settings, "__dict__", {}))
         if not settings_data:

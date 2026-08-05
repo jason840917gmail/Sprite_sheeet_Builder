@@ -22,6 +22,7 @@ class SourceBackgroundPanel(QWidget):
     applyRequested = Signal()
     activateRequested = Signal()
     discardRequested = Signal()
+    cancelRequested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -52,8 +53,10 @@ class SourceBackgroundPanel(QWidget):
         self.apply_button = QPushButton("Apply to Source")
         self.activate_button = QPushButton("Activate Revision")
         self.discard_button = QPushButton("Discard Candidate")
+        self.cancel_button = QPushButton("Cancel")
         self.activate_button.setEnabled(False)
         self.discard_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
         self.status_label = QLabel("Original source is active")
         self.status_label.setWordWrap(True)
 
@@ -76,6 +79,7 @@ class SourceBackgroundPanel(QWidget):
         actions.addWidget(self.apply_button)
         actions.addWidget(self.activate_button)
         actions.addWidget(self.discard_button)
+        actions.addWidget(self.cancel_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -95,6 +99,7 @@ class SourceBackgroundPanel(QWidget):
         self.apply_button.clicked.connect(self.applyRequested.emit)
         self.activate_button.clicked.connect(self.activateRequested.emit)
         self.discard_button.clicked.connect(self.discardRequested.emit)
+        self.cancel_button.clicked.connect(self.cancelRequested.emit)
         self._update_color_button()
 
     def settings(self) -> SourceProcessingSettings:
@@ -114,6 +119,18 @@ class SourceBackgroundPanel(QWidget):
         self.activate_button.setEnabled(ready)
         self.discard_button.setEnabled(ready)
         self.status_label.setText(message)
+
+    def set_job_running(self, running: bool, message: str = "") -> None:
+        self.apply_button.setEnabled(not running)
+        self.cancel_button.setEnabled(running)
+        self.engine.setEnabled(not running)
+        self.color_button.setEnabled(not running)
+        self.detect_button.setEnabled(not running)
+        self.tolerance.setEnabled(not running)
+        self.transparent_threshold.setEnabled(not running)
+        self.foreground_threshold.setEnabled(not running)
+        if message:
+            self.status_label.setText(message)
 
     def _show_detection_hint(self) -> None:
         self.status_label.setText("Use Detect in the source toolbar to sample the current source border.")

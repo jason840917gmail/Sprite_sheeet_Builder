@@ -22,6 +22,7 @@ from sprite_sheet_cleaner.app.engines.smart_solid import SmartSolidEngine
 from sprite_sheet_cleaner.app.core.project_model import ProjectModel
 from sprite_sheet_cleaner.app.core.sheet_builder import build_sheet, sheet_capacity
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
+from sprite_sheet_cleaner.app.jobs.qt_job_controller import JobHandle, QtJobController
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
 from sprite_sheet_cleaner.app.services.source_repository import SourceRepository
 from sprite_sheet_cleaner.app.utils.tool_icons import create_grid_icon, create_pointer_icon, create_select_icon
@@ -46,6 +47,8 @@ class MainWindow(QMainWindow):
             self.source_repository,
             {"exact_key": ExactKeyEngine(), "smart_solid": SmartSolidEngine()},
         )
+        self._source_job: JobHandle | None = None
+        self.job_controller = QtJobController(self)
         self._last_mouse: tuple[int, int] | None = None
         self._last_selection: tuple[int, int, int, int] | None = None
         self._last_zoom = 1.0
@@ -211,6 +214,7 @@ class MainWindow(QMainWindow):
         self.source_background_panel.applyRequested.connect(self._apply_source_background)
         self.source_background_panel.activateRequested.connect(self._activate_source_candidate)
         self.source_background_panel.discardRequested.connect(self._discard_source_candidate)
+        self.source_background_panel.cancelRequested.connect(self._cancel_source_background)
         self.bucket_panel.deleteRequested.connect(self._delete_tile)
         self.bucket_panel.clearRequested.connect(self._clear_bucket)
         self.bucket_panel.duplicateRequested.connect(self._duplicate_tile)
@@ -258,17 +262,56 @@ class MainWindow(QMainWindow):
         if self.source_image is None:
             QMessageBox.warning(self, "Apply background", "Open a source image first.")
             return
+        if self._source_job is not None:
+            return
         try:
             settings = self.source_background_panel.settings()
-            candidate = self.source_processing_service.create_candidate(settings)
         except Exception as exc:
             QMessageBox.critical(self, "Apply background failed", str(exc))
             return
+        self.source_background_panel.set_job_running(True, "Processing source background…")
+        self._source_job = self.job_controller.start(
+            "source-background",
+            lambda progress, cancelled: self.source_processing_service.create_candidate(
+                settings,
+                progress=progress,
+                cancelled=cancelled,
+            ),
+        )
+        self._source_job.signals.progress.connect(self._source_job_progress)
+        self._source_job.signals.completed.connect(self._source_job_completed)
+        self._source_job.signals.failed.connect(self._source_job_failed)
+        self._source_job.signals.cancelled.connect(self._source_job_cancelled)
+        self.statusBar().showMessage("Processing source background…")
+
+    def _source_job_progress(self, value: float, message: str) -> None:
+        self.statusBar().showMessage(f"{message} ({round(value * 100)}%)")
+
+    def _source_job_completed(self, candidate: object) -> None:
+        self._source_job = None
+        revision_id = getattr(candidate, "revision_id", "unknown")
+        self.source_background_panel.set_job_running(False)
         self.source_background_panel.set_candidate_state(
             True,
-            f"Candidate {candidate.revision_id[:8]} is ready. Activate it explicitly after review.",
+            f"Candidate {revision_id[:8]} is ready. Activate it explicitly after review.",
         )
         self.statusBar().showMessage("Background candidate ready; the original source remains active.")
+
+    def _source_job_failed(self, error: object) -> None:
+        self._source_job = None
+        self.source_background_panel.set_job_running(False)
+        self.source_background_panel.set_candidate_state(False, "Original source is active")
+        QMessageBox.critical(self, "Apply background failed", str(error))
+
+    def _source_job_cancelled(self) -> None:
+        self._source_job = None
+        self.source_background_panel.set_job_running(False)
+        self.source_background_panel.set_candidate_state(False, "Processing cancelled; original source remains active")
+        self.statusBar().showMessage("Background processing cancelled.")
+
+    def _cancel_source_background(self) -> None:
+        if self._source_job is not None:
+            self._source_job.cancel()
 
     def _activate_source_candidate(self) -> None:
         try:
