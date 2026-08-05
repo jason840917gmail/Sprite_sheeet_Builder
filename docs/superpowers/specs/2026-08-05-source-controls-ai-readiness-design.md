@@ -165,6 +165,56 @@ When setup and verification succeed during the current session:
 
 Exact Key and Smart Solid retain the neutral `Process` label.
 
+## Truthful progress action
+
+The source `Process` / `Run rembg` / `Run BEN2` button becomes a `ProgressActionButton`. In its idle state it remains an ordinary accessible push button. While a source-processing job owns it, the button rejects duplicate activation and paints a semantic green progress layer behind live stage text. The existing Cancel button remains the explicit cancellation control.
+
+The progress treatment is hybrid because rembg and BEN2 each execute their core inference as one opaque ONNX operation. Neither model exposes a trustworthy percentage inside `session.run`, so the UI must not invent one:
+
+- `Preparing source…` uses an indeterminate moving green band while the input is converted and written;
+- `Loading rembg…` / `Loading BEN2…` is driven by the real provider/session initialization event;
+- `Running rembg…` / `Running BEN2…` remains indeterminate only while the ONNX inference call is active;
+- `Finalizing candidate…` begins only after inference returns and the result is being validated/applied/stored;
+- `Candidate ready` becomes a solid 100% state only after `SourceRepository.create_candidate` succeeds;
+- failure clears the green layer and restores the correct idle action while showing the existing actionable error;
+- cancellation changes the label to `Cancelling…`, remains indeterminate until the worker is actually stopped, and resets only after the job emits its terminal cancelled signal.
+
+A determinate fill is permitted only when an operation reports measured completed/total work units. Stage boundaries are not converted into arbitrary percentages. Thus animation means “this verified phase is currently active,” while a numerical/fill percentage means measured work.
+
+The progress component uses a named semantic `success_progress` token with light/dark variants and contrast-tested foreground text. It preserves the platform button border, radius, focus ring, typography, and size so it feels like the existing technical controls. The animation timer runs only while a live job owns the button. Accessible name/value text mirrors the phase and measured percentage, and the label remains sufficient without color or motion.
+
+## Source-job progress contract
+
+Core jobs use a typed progress update rather than treating every event as a float:
+
+```text
+SourceJobProgress:
+  job_id: unique source-job identifier
+  phase: "preparing" | "loading_model" | "inference" | "finalizing" | "complete"
+  message: user-facing stage text
+  mode: "indeterminate" | "determinate"
+  value: omitted for indeterminate; measured 0.0 through 1.0 for determinate
+```
+
+`QtJobController` forwards this object unchanged. `MainWindow` accepts updates only from the currently active source job, preventing late messages from an earlier cancelled/replaced job from moving the button.
+
+AI worker inference may emit zero or more intermediate protocol messages before its terminal result:
+
+```text
+progress:
+  protocol_version: 1
+  message_type: "progress"
+  request_id: copied from infer request
+  phase: "loading_model" | "inference"
+  mode: "indeterminate" | "determinate"
+  value: present only for measured determinate work
+  message: non-empty stage text
+```
+
+`AIWorkerClient.request` reads and validates progress messages until it receives one terminal `result` or `error`, forwarding matching progress to the source job. Mismatched request IDs, invalid modes/values, or progress after a terminal response are protocol errors. Providers emit `loading_model` immediately before session initialization, `inference` immediately before the real model call, and a terminal result only after output validation/saving. The service itself emits `preparing`, `finalizing`, and `complete` around actual source conversion, matte application, and candidate storage.
+
+For AI cancellation, the request loop observes the job cancellation token. Cancellation terminates and joins the isolated inference-worker process, removes temporary input/output files through the existing temporary-directory lifetime, and only then emits cancelled. Exact Key and Smart Solid re-check cancellation between their real processing phases and never store a candidate after cancellation.
+
 ## Restart fallback
 
 Because engines run in isolated processes and are registered dynamically, installation should normally take effect without restarting. `Restart required` is reserved for a detected activation failure that is plausibly caused by the current process holding stale runtime state; generic health-check failures use `Repair required` instead.
@@ -200,6 +250,8 @@ Shutdown ordering is strict: block shutdown while installation/promotion is acti
 - Stale health results caused by compute changes, repairs, or shutdown are discarded without mutating engine availability.
 - A staged repair cannot promote over files used by an active source job; failed or interrupted promotion restores the prior verified runtime.
 - No timeout result enables Retry/Close until its network operation or complete subprocess tree has stopped and staging cleanup has finished.
+- Source-job progress with a stale job or request ID is ignored/rejected and cannot change the active button.
+- No source job displays 100% until candidate storage succeeds, and no opaque inference phase displays a fabricated percentage.
 
 ## Verification
 
@@ -225,6 +277,13 @@ Automated coverage should include:
 - an active source job prevents staging promotion, and shutdown waits for the job before closing its engine;
 - a ready engine with no source gives open-source guidance;
 - a ready engine with a source runs only after explicit user action and creates a candidate;
+- the action button enters busy state with real preparing/loading/inference/finalizing messages and blocks duplicate runs;
+- opaque model inference uses indeterminate green progress while measured work alone uses determinate fill;
+- the button reaches 100% only after candidate persistence, then returns to the correct engine-specific idle label;
+- failure and cancellation clear progress, preserve actionable status, and never create a candidate;
+- AI cancellation terminates/joins the inference worker before the cancelled UI state settles;
+- stale, mismatched, malformed, and post-terminal progress messages cannot mutate the active job UI;
+- progress text/value remains accessible without relying on green color or animation;
 - restart is not requested after ordinary successful hot registration;
 - restart/repair guidance never claims an engine is ready prematurely.
 
