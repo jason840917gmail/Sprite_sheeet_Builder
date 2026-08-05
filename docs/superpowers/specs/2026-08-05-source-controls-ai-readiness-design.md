@@ -183,6 +183,8 @@ A determinate fill is permitted only when an operation reports measured complete
 
 The progress component uses a named semantic `success_progress` token with light/dark variants and contrast-tested foreground text. It preserves the platform button border, radius, focus ring, typography, and size so it feels like the existing technical controls. The animation timer runs only while a live job owns the button. Accessible name/value text mirrors the phase and measured percentage, and the label remains sufficient without color or motion.
 
+Completion is a real, paintable state rather than an immediately overwritten assignment. On the matching completed signal, the button enters `complete`, shows a solid 100% fill and `Candidate ready`, updates its accessible value, and remains non-interactive for a minimum 750 ms. A single-shot timer then restores the engine-specific idle label only if its job/generation still owns the button. Returning to the event loop before the timer fires guarantees at least one paint opportunity. Failure and cancelled states reset without displaying 100%.
+
 ## Source-job progress contract
 
 Core jobs use a typed progress update rather than treating every event as a float:
@@ -197,6 +199,17 @@ SourceJobProgress:
 ```
 
 `QtJobController` forwards this object unchanged. `MainWindow` accepts updates only from the currently active source job, preventing late messages from an earlier cancelled/replaced job from moving the button.
+
+Every job signal carries the same ID, not only progress:
+
+```text
+progress(job_id, SourceJobProgress)
+completed(job_id, result)
+failed(job_id, error)
+cancelled(job_id)
+```
+
+`MainWindow` filters all four signal types against the active job ID. A stale progress or terminal signal is ignored and cannot clear `_source_job`, change candidate state, dispose an engine, or reset the button. The one inference request made for a source job uses that job ID as its worker `request_id`; every intermediate and terminal worker message must preserve it.
 
 AI worker inference may emit zero or more intermediate protocol messages before its terminal result:
 
@@ -213,7 +226,17 @@ progress:
 
 `AIWorkerClient.request` reads and validates progress messages until it receives one terminal `result` or `error`, forwarding matching progress to the source job. Mismatched request IDs, invalid modes/values, or progress after a terminal response are protocol errors. Providers emit `loading_model` immediately before session initialization, `inference` immediately before the real model call, and a terminal result only after output validation/saving. The service itself emits `preparing`, `finalizing`, and `complete` around actual source conversion, matte application, and candidate storage.
 
+The current blocking `readline()` is replaced by a client-owned reader thread feeding a bounded response queue. The request loop polls that queue with a short timeout so it can observe cancellation and request deadlines even when the worker emits no output. On cancellation/timeout it terminates the worker process, closes all pipe handles, joins the process and reader thread, drains/discards queued messages, and only then returns the terminal cancellation/error. `IsolatedAIWorkerEngine` clears its cached client on this path; a later run must create a fresh process and reader. Normal result/error/shutdown paths also close or retain resources only according to explicit client ownership, never leaving a blocked reader behind.
+
 For AI cancellation, the request loop observes the job cancellation token. Cancellation terminates and joins the isolated inference-worker process, removes temporary input/output files through the existing temporary-directory lifetime, and only then emits cancelled. Exact Key and Smart Solid re-check cancellation between their real processing phases and never store a candidate after cancellation.
+
+Candidate persistence uses an atomic cancellation/commit boundary. The job context owns a lock-protected `begin_commit()` operation. `SourceProcessingService` checks cancellation before finalization and again immediately before persistence, then calls `begin_commit()`:
+
+- if cancellation already won, `begin_commit()` returns false and no candidate is written;
+- if commit wins, later cancellation requests cannot reclassify the job as cancelled;
+- `create_candidate` then either succeeds and yields exactly one completed signal, or raises and yields exactly one failed signal.
+
+`QtJobController` bases the terminal outcome on this context state rather than checking a bare cancellation flag after the operation returns. This prevents a late click on Cancel after successful persistence from hiding a real candidate behind a false cancelled result. A per-job terminal guard ensures completed, failed, and cancelled are mutually exclusive.
 
 ## Restart fallback
 
@@ -252,6 +275,8 @@ Shutdown ordering is strict: block shutdown while installation/promotion is acti
 - No timeout result enables Retry/Close until its network operation or complete subprocess tree has stopped and staging cleanup has finished.
 - Source-job progress with a stale job or request ID is ignored/rejected and cannot change the active button.
 - No source job displays 100% until candidate storage succeeds, and no opaque inference phase displays a fabricated percentage.
+- Cancellation and candidate commit are atomic: cancellation before commit writes nothing, while cancellation after commit cannot replace completion.
+- A cancelled/failed/completed source job emits exactly one ID-bearing terminal signal.
 
 ## Verification
 
@@ -282,7 +307,12 @@ Automated coverage should include:
 - the button reaches 100% only after candidate persistence, then returns to the correct engine-specific idle label;
 - failure and cancellation clear progress, preserve actionable status, and never create a candidate;
 - AI cancellation terminates/joins the inference worker before the cancelled UI state settles;
+- cancellation while a worker emits no output interrupts the reader, closes pipes, clears the cached client, and permits a fresh subsequent run;
+- cancellation before/during finalization prevents persistence, while cancellation after the commit boundary preserves the completed candidate;
 - stale, mismatched, malformed, and post-terminal progress messages cannot mutate the active job UI;
+- stale completed, failed, and cancelled signals cannot clear or reset a newer active job;
+- the solid 100% completion state receives a paint cycle, blocks duplicate activation during its hold, then restores the correct idle label after at least 750 ms;
+- accessible name/value updates are verified for idle, every busy phase, cancelling, complete, failed, and cancelled transitions;
 - progress text/value remains accessible without relying on green color or animation;
 - restart is not requested after ordinary successful hot registration;
 - restart/repair guidance never claims an engine is ready prematurely.
