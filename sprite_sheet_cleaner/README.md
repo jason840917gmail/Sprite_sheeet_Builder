@@ -10,6 +10,8 @@ python -m venv .venv
 pip install -r sprite_sheet_cleaner\requirements.txt
 ```
 
+The core application supports Python 3.11 through 3.14. Optional background-removal runtimes and model weights are installed separately through the in-app Model Manager and are never stored in this repository.
+
 ## Run
 
 From the workspace root:

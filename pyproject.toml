@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sprite-sheet-cleaner"
+version = "0.1.0"
+description = "Desktop sprite-sheet extraction and transparent-background preparation tool"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "numpy>=1.26,<3",
+    "Pillow>=10,<13",
+    "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pyinstaller>=6,<7",
+]
+
+[tool.setuptools.packages.find]
+include = ["sprite_sheet_cleaner*"]
+
+[tool.pytest.ini_options]
+testpaths = ["sprite_sheet_cleaner/tests"]
+markers = [
+    "ai: tests that require an explicitly installed optional AI runtime or model",
+]
