@@ -38,7 +38,7 @@ The existing bucket `tileClicked` signal remains unchanged. `SourceViewer` curre
 2. `MainWindow` compares that index with the active preview index.
 3. A matching index restores `source_image`; a different index displays the selected tile and records its index.
 4. The shared Escape handler checks preview state first. If a preview is active it restores the source and stops; otherwise it clears the source selection as it does today.
-5. Source replacement and every bucket mutation—delete, clear, duplicate, move, reorder, undo, and redo—call the shared restore operation before changing state. Restoration displays the full source and clears the active preview index as one operation, so the state cannot say “source” while a tile image remains displayed.
+5. Source replacement and every bucket mutation—including tile addition, delete, clear, duplicate, move, reorder, rename, undo, and redo—call the shared restore operation before changing state. Restoration displays the full source and clears the active preview index as one operation, so the state cannot say “source” while a tile image remains displayed and a renamed tile cannot leave stale preview text in the status bar.
 6. Restoration refreshes the normal source-view status. The tile name and exit hint are removed immediately.
 
 ## Edge cases
@@ -61,7 +61,7 @@ Automated tests should cover:
 - real Escape key events behave identically with the source viewer and bucket list focused;
 - the status hint is present while previewing;
 - the normal source status replaces the preview hint after Escape and same-tile restoration;
-- delete, reorder, and undo while previewing restore the source before mutating the bucket;
+- representative add, delete, reorder, rename, and undo operations while previewing restore the source before mutating the bucket;
 - invalid indexes do not change state.
 
 Run the focused main-window tests, followed by the full test suite if the focused tests pass.
