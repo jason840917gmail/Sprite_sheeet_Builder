@@ -15,6 +15,12 @@ class RuntimeRegistryTests(unittest.TestCase):
         registry = RuntimeRegistry.from_directory(directory)
         self.assertEqual({item.runtime_id for item in registry.manifests()}, {"ben2-base-onnx", "rembg-onnx"})
 
+    def test_ben2_runtime_includes_worker_image_dependency(self) -> None:
+        directory = Path(__file__).parents[1] / "app" / "runtime" / "manifests"
+        manifest = RuntimeRegistry.from_directory(directory).get("ben2-base-onnx")
+
+        self.assertIn("Pillow==12.3.0", manifest.package_requirements)
+
     def test_download_is_marked_ready_after_verified_install(self) -> None:
         directory = Path(__file__).parents[1] / "app" / "runtime" / "manifests"
         manifest = RuntimeRegistry.from_directory(directory).get("ben2-base-onnx")
@@ -47,4 +53,3 @@ class _Response:
     def read(self, _size: int) -> bytes:
         payload, self.payload = self.payload, b""
         return payload
-

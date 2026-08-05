@@ -17,7 +17,10 @@ class AIWorkerClient:
 
     def start(self) -> None:
         if self.process is not None:
-            return
+            if self.process.poll() is None:
+                return
+            self._close_streams(self.process)
+            self.process = None
         self.process = subprocess.Popen(
             self.command,
             stdin=subprocess.PIPE,
@@ -33,7 +36,16 @@ class AIWorkerClient:
         self.process.stdin.flush()
         response = self.process.stdout.readline()
         if not response:
-            raise RuntimeError("AI worker exited without a response.")
+            details = ""
+            process = self.process
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                pass
+            if process.poll() is not None and process.stderr is not None:
+                details = process.stderr.read().decode("utf-8", errors="replace").strip()
+            suffix = f": {details[-2000:]}" if details else "."
+            raise RuntimeError(f"AI worker exited without a response{suffix}")
         return decode_message(response)
 
     def close(self, timeout: float = 2.0) -> None:
@@ -48,7 +60,10 @@ class AIWorkerClient:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-        if process.stdout is not None:
-            process.stdout.close()
-        if process.stderr is not None:
-            process.stderr.close()
+        self._close_streams(process)
+
+    @staticmethod
+    def _close_streams(process: subprocess.Popen[bytes]) -> None:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()

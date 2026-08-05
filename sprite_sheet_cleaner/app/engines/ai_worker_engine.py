@@ -56,19 +56,26 @@ class IsolatedAIWorkerEngine:
             input_path = directory_path / "input.png"
             output_path = directory_path / "matte.png"
             source.save(input_path, format="PNG")
-            response = self._client_for_worker().request(
-                {
-                    "protocol_version": 1,
-                    "message_type": "infer",
-                    "request_id": "background-removal",
-                    "provider_id": self.provider_id,
-                    "model_id": self.model_id,
-                    "model_path": str(self.model_path),
-                    "input_path": str(input_path),
-                    "output_path": str(output_path),
-                    "compute": str(getattr(settings, "compute", self.compute)),
-                }
-            )
+            client = self._client_for_worker()
+            try:
+                response = client.request(
+                    {
+                        "protocol_version": 1,
+                        "message_type": "infer",
+                        "request_id": "background-removal",
+                        "provider_id": self.provider_id,
+                        "model_id": self.model_id,
+                        "model_path": str(self.model_path),
+                        "input_path": str(input_path),
+                        "output_path": str(output_path),
+                        "compute": str(getattr(settings, "compute", self.compute)),
+                    }
+                )
+            except Exception:
+                client.close()
+                if self._client is client:
+                    self._client = None
+                raise
             if response.get("message_type") == "error":
                 raise RuntimeError(str(response.get("message", "AI worker inference failed.")))
             if response.get("message_type") != "result" or not output_path.is_file():
@@ -86,4 +93,3 @@ class IsolatedAIWorkerEngine:
                 self._client.close()
             finally:
                 self._client = None
-

@@ -19,6 +19,31 @@ class AIWorkerLifecycleTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_dead_worker_is_replaced_on_next_start(self) -> None:
+        client = AIWorkerClient([sys.executable, "-c", "pass"])
+        try:
+            client.start()
+            first = client.process
+            self.assertIsNotNone(first)
+            first.wait(timeout=5)
+
+            client.start()
+
+            self.assertIsNot(client.process, first)
+        finally:
+            client.close()
+
+    def test_worker_startup_error_includes_stderr(self) -> None:
+        client = AIWorkerClient(
+            [sys.executable, "-c", "import sys; sys.stderr.write('missing optional dependency')"]
+        )
+        try:
+            client.start()
+            with self.assertRaisesRegex(RuntimeError, "missing optional dependency"):
+                client.request({"protocol_version": 1, "message_type": "hello", "request_id": "stderr"})
+        finally:
+            client.close()
+
 
 if __name__ == "__main__":
     unittest.main()

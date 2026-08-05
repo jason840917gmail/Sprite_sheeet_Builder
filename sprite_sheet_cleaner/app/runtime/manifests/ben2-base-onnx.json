@@ -2,7 +2,8 @@
   "runtime_id": "ben2-base-onnx",
   "display_name": "BEN2 Base (ONNX)",
   "package_requirements": [
-    "onnxruntime==1.28.0"
+    "onnxruntime==1.28.0",
+    "Pillow==12.3.0"
   ],
   "model_url": "https://huggingface.co/PramaLLC/BEN2/resolve/main/BEN2_Base.onnx",
   "model_filename": "BEN2_Base.onnx",
