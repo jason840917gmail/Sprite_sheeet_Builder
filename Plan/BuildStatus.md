@@ -149,6 +149,8 @@ Updated: 2026-08-05
 - Added immutable original sources, candidate/active revisions, one-pass
   Exact Key and Smart Solid engines, cancellable Qt jobs, and explicit
   activation/discard workflow.
+- Added **Apply Candidate to Bucket**, which updates existing bucket snapshots
+  in one undoable operation without changing the active source revision.
 - Added stable tile snapshots, portable `.sscproj` archives, archive limits,
   atomic saves, legacy JSON import, and session undo/redo for bucket updates.
 - Added verified optional runtime manifests and a Model Manager for rembg/U2Net
