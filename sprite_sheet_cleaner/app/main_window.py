@@ -17,14 +17,19 @@ from PySide6.QtWidgets import (
 
 from sprite_sheet_cleaner.app.core.background_detector import detect_background_color
 from sprite_sheet_cleaner.app.core.export_manager import export_individual_tiles, export_sheet
+from sprite_sheet_cleaner.app.engines.exact_key import ExactKeyEngine
+from sprite_sheet_cleaner.app.engines.smart_solid import SmartSolidEngine
 from sprite_sheet_cleaner.app.core.project_model import ProjectModel
 from sprite_sheet_cleaner.app.core.sheet_builder import build_sheet, sheet_capacity
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
+from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
+from sprite_sheet_cleaner.app.services.source_repository import SourceRepository
 from sprite_sheet_cleaner.app.utils.tool_icons import create_grid_icon, create_pointer_icon, create_select_icon
 from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 from sprite_sheet_cleaner.app.widgets.bucket_panel import BucketPanel
 from sprite_sheet_cleaner.app.widgets.final_preview import FinalPreview
 from sprite_sheet_cleaner.app.widgets.settings_panel import SettingsPanel
+from sprite_sheet_cleaner.app.widgets.source_background_panel import SourceBackgroundPanel
 from sprite_sheet_cleaner.app.widgets.source_viewer import SourceViewer
 
 
@@ -36,11 +41,17 @@ class MainWindow(QMainWindow):
 
         self.model = ProjectModel()
         self.source_image: Image.Image | None = None
+        self.source_repository = SourceRepository()
+        self.source_processing_service = SourceProcessingService(
+            self.source_repository,
+            {"exact_key": ExactKeyEngine(), "smart_solid": SmartSolidEngine()},
+        )
         self._last_mouse: tuple[int, int] | None = None
         self._last_selection: tuple[int, int, int, int] | None = None
         self._last_zoom = 1.0
 
         self.source_viewer = SourceViewer()
+        self.source_background_panel = SourceBackgroundPanel()
         self.settings_panel = SettingsPanel()
         self.bucket_panel = BucketPanel()
         self.final_preview = FinalPreview()
@@ -54,6 +65,7 @@ class MainWindow(QMainWindow):
     def _build_layout(self) -> None:
         self.source_viewer.setMinimumSize(780, 520)
         self.final_preview.setMinimumHeight(170)
+        self.source_background_panel.setMinimumWidth(310)
         self.settings_panel.setMinimumWidth(310)
         self.bucket_panel.setMinimumWidth(310)
         self.bucket_panel.setMinimumHeight(240)
@@ -67,10 +79,12 @@ class MainWindow(QMainWindow):
 
         self.right_splitter = QSplitter(Qt.Vertical)
         self.right_splitter.setChildrenCollapsible(False)
+        self.right_splitter.addWidget(self.source_background_panel)
         self.right_splitter.addWidget(self.settings_panel)
         self.right_splitter.addWidget(self.bucket_panel)
         self.right_splitter.setStretchFactor(0, 1)
-        self.right_splitter.setStretchFactor(1, 2)
+        self.right_splitter.setStretchFactor(1, 1)
+        self.right_splitter.setStretchFactor(2, 2)
 
         self.main_splitter = QSplitter(Qt.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
@@ -86,7 +100,7 @@ class MainWindow(QMainWindow):
         height = max(self.centralWidget().height(), 1)
         self.main_splitter.setSizes([round(width * 0.76), round(width * 0.24)])
         self.left_splitter.setSizes([round(height * 0.78), round(height * 0.22)])
-        self.right_splitter.setSizes([round(height * 0.36), round(height * 0.64)])
+        self.right_splitter.setSizes([round(height * 0.25), round(height * 0.30), round(height * 0.45)])
 
     def _create_actions(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -194,6 +208,9 @@ class MainWindow(QMainWindow):
         self.settings_panel.addSelectionRequested.connect(self._add_selection_to_bucket)
         self.settings_panel.addAllRequested.connect(self._add_all_grid_cells)
         self.settings_panel.detectBackgroundRequested.connect(self._detect_background_color)
+        self.source_background_panel.applyRequested.connect(self._apply_source_background)
+        self.source_background_panel.activateRequested.connect(self._activate_source_candidate)
+        self.source_background_panel.discardRequested.connect(self._discard_source_candidate)
         self.bucket_panel.deleteRequested.connect(self._delete_tile)
         self.bucket_panel.clearRequested.connect(self._clear_bucket)
         self.bucket_panel.duplicateRequested.connect(self._duplicate_tile)
@@ -220,6 +237,8 @@ class MainWindow(QMainWindow):
             return
 
         self.model.source_image_path = str(path)
+        self.source_repository.open_original(self.source_image, path)
+        self.source_background_panel.set_candidate_state(False, "Original source is active")
         if clear_tiles:
             self.model.clear_tiles()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
@@ -234,6 +253,39 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Opened {path.name} | Auto-detected background #{detected_color[0]:02X}{detected_color[1]:02X}{detected_color[2]:02X}"
         )
+
+    def _apply_source_background(self) -> None:
+        if self.source_image is None:
+            QMessageBox.warning(self, "Apply background", "Open a source image first.")
+            return
+        try:
+            settings = self.source_background_panel.settings()
+            candidate = self.source_processing_service.create_candidate(settings)
+        except Exception as exc:
+            QMessageBox.critical(self, "Apply background failed", str(exc))
+            return
+        self.source_background_panel.set_candidate_state(
+            True,
+            f"Candidate {candidate.revision_id[:8]} is ready. Activate it explicitly after review.",
+        )
+        self.statusBar().showMessage("Background candidate ready; the original source remains active.")
+
+    def _activate_source_candidate(self) -> None:
+        try:
+            revision = self.source_repository.activate_candidate()
+        except Exception as exc:
+            QMessageBox.warning(self, "Activate revision", str(exc))
+            return
+        self.source_image = revision.processed_image.copy()
+        self.source_viewer.set_image(pil_to_qimage(self.source_image))
+        self.model.settings.remove_background = False
+        self.source_background_panel.set_candidate_state(False, f"Revision {revision.revision_id[:8]} is active.")
+        self.statusBar().showMessage("Activated processed source; existing bucket tiles were not changed.")
+
+    def _discard_source_candidate(self) -> None:
+        self.source_repository.discard_candidate()
+        self.source_background_panel.set_candidate_state(False, "Original source is active")
+        self.statusBar().showMessage("Discarded background candidate.")
 
     def _save_project(self) -> None:
         if self.source_image is None or not self.model.source_image_path:
@@ -291,6 +343,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Loaded project {project_path.name}")
 
     def _settings_changed(self, settings: AppSettings) -> None:
+        if self.source_repository.document.active_revision is not None:
+            settings.remove_background = False
         self.model.settings = settings
         self._apply_selection_geometry()
         self._sync_sheet_to_grid()
@@ -461,13 +515,17 @@ class MainWindow(QMainWindow):
             return None
 
         try:
-            color = detect_background_color(self.source_image, self.source_viewer.selection_rect())
+            color = detect_background_color(
+                self.source_repository.original_image(),
+                self.source_viewer.selection_rect(),
+            )
         except Exception as exc:
             if show_error_dialog:
                 QMessageBox.critical(self, "Detect background failed", str(exc))
             return None
 
         self.settings_panel.set_detected_background_color(color)
+        self.source_background_panel.set_background_color(color)
         return color
 
     def _export_sheet(self) -> None:
