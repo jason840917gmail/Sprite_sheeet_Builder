@@ -142,7 +142,7 @@ Contains:
 - Cache keys for the matte and processed RGBA source
 - Small preview metadata suitable for project persistence
 
-Only a fully completed, verified revision may become active. Temporary results are never exposed as committed revisions.
+Only a fully completed, verified revision may become an activation candidate. Successful processing does not switch the active source automatically: the user compares the candidate and explicitly chooses Activate Revision. Failure, cancellation, or rejection leaves the prior revision active. Temporary results are never exposed as committed revisions.
 
 ### `TileSnapshot`
 
@@ -223,6 +223,8 @@ Copy non-overlapping RGBA tile pixels directly into transparent canvases rather 
 
 Extend foreground RGB into fully transparent neighboring pixels without changing alpha. This supplies useful texture-filtering colors and prevents dark or background-colored fringes in game engines.
 
+Dilation is an output-asset operation. Run it after the final tile resize, padding, and placement because premultiplication intentionally erases RGB where alpha is zero. A source revision may contain dilation for faithful previewing, but every persisted tile snapshot must repeat dilation after its last geometric transform. Assemble sheets from those prepared tile pixels without dilating across tile boundaries, so one atlas cell cannot borrow colors from a neighboring sprite.
+
 ### 12. Straight-alpha RGBA PNG export
 
 Save standard RGBA PNG files with straight alpha. Validate mode, dimensions, alpha range, and output readability before reporting success.
@@ -230,6 +232,8 @@ Save standard RGBA PNG files with straight alpha. Validate mode, dimensions, alp
 ### Premultiplied-alpha scaling
 
 Any scaling step premultiplies RGB by alpha, resamples color and alpha consistently, then safely unpremultiplies back to straight alpha before storage or export. This prevents invisible RGB from contaminating antialiased edges.
+
+Because zero-alpha RGB cannot survive premultiplication, transparent-pixel RGB dilation always follows the last premultiplied resize rather than preceding it.
 
 ## Source-Level Processing and Large Images
 
@@ -300,6 +304,10 @@ Model Manager exposes Not Installed, Downloading, Verifying, Installing, Testing
 
 Downloads go to temporary or resumable files, are checksum-verified, and move into final storage atomically. Installation creates or updates a provider-specific virtual environment without modifying the repository or the core environment. Repair recreates damaged environments from the locked manifest. Uninstall removes only the resolved provider/model targets and reports recoverability.
 
+Python package locks include artifact hashes and platform/Python compatibility markers, and installation uses hash-required mode. Because managed virtual environments inherit the interpreter that launched the source application, every runtime manifest declares supported host-Python versions. Model Manager reports Incompatible before downloading when the host interpreter has no verified lock. Downloading a separate Python distribution is out of scope for this iteration.
+
+Every managed runtime and model occupies an application-created leaf directory with an ownership marker containing its identifier and manifest version. Before repair or uninstall, canonicalize the configured root and target; require the target to be a marked descendant strictly below that root; reject the root itself, shared parents, symbolic links, junctions, reparse points, and paths that escape containment. Uninstall enumerates and removes only manifest-owned files and refuses unknown user-created content rather than recursively deleting it.
+
 Installed engines work offline. Missing network access never prevents the core application, built-in engines, existing projects, or exports from working.
 
 ### Initial runtime strategy
@@ -308,6 +316,8 @@ Installed engines work offline. Missing network access never prevents the core a
 - Select a locked ONNX Runtime CPU or CUDA profile through the manifest and capability service.
 - Prefer BEN2 ONNX before native PyTorch to reduce installation size and dependency complexity.
 - Add native BEN2 only after representative asset benchmarks demonstrate a useful advantage.
+
+The rembg adapter must not use rembg's implicit first-inference model download. Model Manager preinstalls and verifies every requested weight, launches the worker with rembg's model directory set to the exact managed location, and performs a checksum preflight before session creation. A missing or damaged weight produces a Repair Required or Not Installed result; it never triggers network access from inference. The same explicit-install rule applies to auxiliary model files.
 
 ## GPU Discovery and Fallback
 
@@ -343,13 +353,15 @@ The UI remains responsive throughout model installation, model loading, preview 
 
 ### `.sscproj` bundle
 
-Introduce a versioned `.sscproj` bundle containing:
+Introduce `.sscproj` as a single ZIP-based project file containing:
 
-- Project JSON manifest
-- Exact bucket snapshot PNG files
+- `project.json` at the archive root
+- Exact bucket snapshot PNG files under `tiles/<tile-id>.png`
 - Small project-owned previews or metadata required for reliable display
 
 Do not embed AI environments or model weights. Do not embed the original source by default. Loading legacy `.ssc.json` remains supported through migration.
+
+Treat project archives as untrusted input. Validate the central directory before reading payloads: allow only normalized relative POSIX entry names from the documented schema; reject absolute paths, drive prefixes, backslashes, `.` or `..` components, duplicate names, links, and unexpected entry types. Enforce at most 20,000 entries, an 8 MiB `project.json`, 256 MiB per stored entry, and 4 GiB total declared uncompressed archive data. Validate each decoded tile as RGBA PNG with width and height no greater than 16,384, no more than 64 million pixels per tile, and no more than two billion decoded tile pixels per project. Stream or read explicitly named entries without extracting arbitrary archive paths.
 
 ### Paths and fingerprints
 
@@ -357,11 +369,24 @@ Store a relative source path when possible and retain enough fingerprint metadat
 
 ### Atomicity and recovery
 
-Write a new project bundle to a temporary sibling, validate it, preserve a bounded backup of the previous valid save, then replace the target. Track dirty state and prompt before open, load, close, or exit would discard changes. A recovery flow detects an interrupted temporary save or valid backup.
+Write a complete ZIP project to a temporary sibling on the same volume, close and reopen it through the full validator, preserve one bounded backup of the previous valid save, flush the new file as supported by the platform, then replace the target with an atomic same-volume file replacement. Track dirty state and prompt before open, load, close, or exit would discard changes. A recovery flow detects an interrupted temporary save or valid backup and never merges entries from two generations.
+
+### Legacy project import
+
+Legacy `.ssc.json` files contain crop metadata and settings but not tile pixels, so import requires locating and fingerprinting the referenced source. If the source is unavailable or materially different, metadata can be inspected but tile migration is blocked until the correct source is located.
+
+When the source is available, offer two explicit paths:
+
+- Legacy-compatible import reconstructs bucket tile snapshots with a migration-only renderer matching the old per-tile algorithm closely enough to preserve the old bucket representation, then saves those pixels into `.sscproj`. Corrected sheet assembly applies after migration, so this is not a promise to reproduce an old exported sheet's repeated-alpha bug.
+- Reprocess with the new pipeline previews and creates snapshots from a newly approved source revision.
+
+Pixel-identical save/reload guarantees apply to `.sscproj` snapshots. They do not apply to legacy metadata before a migration path has successfully produced and persisted snapshots.
 
 ### Cache policy
 
 Processed source revisions and mattes are regenerable caches keyed by source fingerprint, engine/model version and checksum, processing recipe version, and normalized settings. Cache entries live outside Git and use an index with size, last access, and validity metadata. Users can inspect cache usage, set a limit, and clear regenerable data without deleting project bucket snapshots or installed models.
+
+Revisions expose Ready, Regenerable, and Unavailable states. Clearing a processed-source cache never prevents viewing or exporting persisted bucket snapshots. A missing cached revision is Regenerable only when the verified source, exact engine adapter, exact model checksum, and required runtime remain available. Otherwise extraction, revision comparison, and tile refresh from that revision are disabled with actions to locate the source, reinstall the exact model/runtime when still available, or create a distinct new revision with a currently available model. Regeneration never silently substitutes a newer model or changed source. Removing a model lists affected revisions before confirmation but does not remove project snapshots.
 
 ## Interface Direction
 
@@ -397,7 +422,7 @@ Use a nonmodal job strip with stage, progress, backend, elapsed time, Cancel, an
 
 ### Revision completion
 
-After success, display that the new source revision is active and existing bucket tiles were not changed. Present Compare, Apply to Selected Tiles, and Apply to All Tiles actions. Revision-difference status must use text or icons as well as color.
+After successful processing, display that a new candidate revision is ready while the previous revision remains active. Present Compare, Activate Revision, and Discard Candidate actions. After explicit activation, state that existing bucket tiles were not changed and present Compare, Apply to Selected Tiles, and Apply to All Tiles. Revision-difference status must use text or icons as well as color.
 
 ### Model Manager
 
@@ -424,7 +449,7 @@ Maintain representative fixtures for crisp pixel art, antialiased sprites, thin 
 - Download tests using a fake server for resume, checksum mismatch, interruption, unavailable network, incompatible manifest, and disk full.
 - Simulated CUDA discovery, initialization, out-of-memory, smaller-chunk retry, and CPU fallback tests.
 - Optional marked tests on a real NVIDIA GPU for supported provider profiles.
-- PySide6 interaction tests for preview/apply behavior, stable buckets, compare/update actions, Model Manager states, dirty prompts, and undo/redo.
+- PySide6 interaction tests for preview/apply behavior, successful candidate processing without automatic activation, explicit activation, candidate rejection, stable buckets, compare/update actions, Model Manager states, dirty prompts, and undo/redo.
 - Large-source tests for bounded memory, disk-backed mattes, cancellation, cache cleanup, and preview responsiveness.
 - End-to-end tests covering source open, processing, extraction, project save/reload, and transparent PNG export.
 
@@ -436,16 +461,21 @@ Maintain representative fixtures for crisp pixel art, antialiased sprites, thin 
 - Semitransparent pixel alpha survives source, tile, and sheet placement unchanged unless an intentional matte operation changes it.
 - Exact Key is deterministic and binary.
 - Smart Solid protects disconnected, background-like foreground regions.
-- Transparent-edge RGB dilation never changes alpha.
-- The UI remains responsive for processing, installation, and export jobs.
+- Transparent-edge RGB dilation never changes alpha, runs after the last tile transform, and its hidden RGB survives individual-tile and sheet PNG round trips.
+- On the reference test workstation, event-loop probe latency during processing, installation, and export jobs remains at or below 100 ms at the 95th percentile and 250 ms maximum, excluding an acknowledged operating-system stall.
 - Failed or cancelled jobs do not replace the active revision.
+- Successful processing alone does not replace the active revision; only the explicit Activate Revision command does so.
 - No AI framework or model file appears in the repository.
 - Installed providers function offline.
 - GPU failures fall back visibly and safely in Auto mode.
-- Legacy projects remain loadable.
+- Legacy project metadata remains readable; tile migration requires the matching source and one of the explicit legacy-compatible or new-pipeline paths.
 - Exported assets are readable straight-alpha RGBA PNGs.
 
-Quality benchmarks use foreground/matte pixel error and boundary accuracy against curated ground truth. AI timing is reported per model, image size, and hardware rather than enforcing one universal inference time. Responsiveness, bounded memory, progress, and cancellation are release requirements.
+Built-in job cancellation updates the UI within 100 ms and reaches a cancelled terminal state within 2 seconds. An AI worker that cannot cancel cooperatively is terminated within 5 seconds, after which the previous revision remains active.
+
+For a `W x H` source, the main process's incremental full-source processing peak, above its idle project baseline, must not exceed `12 * W * H + 512 MiB` on the large-source benchmark. Each AI manifest records a measured warm-model baseline and maximum worker working set for its reference chunk; the worker must stay within their sum plus 15 percent on the same profile. Any provider that cannot meet its declared limit fails preflight or reduces its chunk rather than attempting an unbounded allocation.
+
+Quality benchmarks use foreground/matte pixel error and boundary F-score against versioned ground truth. Smart Solid must improve mean boundary F-score by at least five percentage points and reduce mean alpha absolute error by at least 20 percent versus the current RGB-threshold implementation on the solid-background corpus, without regressing the protected similar-color subset. Each AI adapter must match its pinned upstream reference output within the adapter's documented numeric tolerance, and common post-processing must not reduce mean boundary F-score by more than one percentage point unless its halo/despill metric improves by an approved larger margin. AI timing is reported per model, image size, and hardware rather than enforcing one universal inference time.
 
 ## Delivery Sequence
 
