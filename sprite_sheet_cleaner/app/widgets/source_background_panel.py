@@ -20,6 +20,7 @@ from sprite_sheet_cleaner.app.models.source_processing_settings import SourcePro
 class SourceBackgroundPanel(QWidget):
     settingsChanged = Signal(object)
     applyRequested = Signal()
+    applyToBucketRequested = Signal()
     activateRequested = Signal()
     discardRequested = Signal()
     cancelRequested = Signal()
@@ -56,9 +57,11 @@ class SourceBackgroundPanel(QWidget):
         self.foreground_threshold.setValue(64)
         self.apply_button = QPushButton("Apply to Source")
         self.activate_button = QPushButton("Activate Revision")
+        self.apply_bucket_button = QPushButton("Apply Candidate to Bucket")
         self.discard_button = QPushButton("Discard Candidate")
         self.cancel_button = QPushButton("Cancel")
         self.activate_button.setEnabled(False)
+        self.apply_bucket_button.setEnabled(False)
         self.discard_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.status_label = QLabel("Original source is active")
@@ -83,6 +86,7 @@ class SourceBackgroundPanel(QWidget):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.addWidget(self.apply_button)
         actions.addWidget(self.activate_button)
+        actions.addWidget(self.apply_bucket_button)
         actions.addWidget(self.discard_button)
         actions.addWidget(self.cancel_button)
 
@@ -104,6 +108,7 @@ class SourceBackgroundPanel(QWidget):
         self.foreground_threshold.valueChanged.connect(self._emit_settings_changed)
         self.apply_button.clicked.connect(self.applyRequested.emit)
         self.activate_button.clicked.connect(self.activateRequested.emit)
+        self.apply_bucket_button.clicked.connect(self.applyToBucketRequested.emit)
         self.discard_button.clicked.connect(self.discardRequested.emit)
         self.cancel_button.clicked.connect(self.cancelRequested.emit)
         self._update_color_button()
@@ -134,6 +139,7 @@ class SourceBackgroundPanel(QWidget):
 
     def set_candidate_state(self, ready: bool, message: str) -> None:
         self.activate_button.setEnabled(ready)
+        self.apply_bucket_button.setEnabled(ready)
         self.discard_button.setEnabled(ready)
         self.status_label.setText(message)
 
@@ -141,6 +147,7 @@ class SourceBackgroundPanel(QWidget):
         self.apply_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
         self.engine.setEnabled(not running)
+        self.apply_bucket_button.setEnabled(not running and self.discard_button.isEnabled())
         self.compute.setEnabled(not running)
         self.color_button.setEnabled(not running)
         self.detect_button.setEnabled(not running)

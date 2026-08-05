@@ -22,6 +22,7 @@ from sprite_sheet_cleaner.app.engines.smart_solid import SmartSolidEngine
 from sprite_sheet_cleaner.app.engines.ai_worker_engine import IsolatedAIWorkerEngine
 from sprite_sheet_cleaner.app.core.project_model import ProjectModel
 from sprite_sheet_cleaner.app.core.sheet_builder import build_sheet, sheet_capacity
+from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.jobs.qt_job_controller import JobHandle, QtJobController
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
@@ -232,6 +233,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.detectBackgroundRequested.connect(self._detect_background_color)
         self.source_background_panel.applyRequested.connect(self._apply_source_background)
         self.source_background_panel.activateRequested.connect(self._activate_source_candidate)
+        self.source_background_panel.applyToBucketRequested.connect(self._apply_candidate_to_bucket)
         self.source_background_panel.discardRequested.connect(self._discard_source_candidate)
         self.source_background_panel.cancelRequested.connect(self._cancel_source_background)
         self.bucket_panel.deleteRequested.connect(self._delete_tile)
@@ -378,6 +380,35 @@ class MainWindow(QMainWindow):
         self.source_repository.discard_candidate()
         self.source_background_panel.set_candidate_state(False, "Original source is active")
         self.statusBar().showMessage("Discarded background candidate.")
+
+    def _apply_candidate_to_bucket(self) -> None:
+        candidate = self.source_repository.document.candidate_revision
+        if candidate is None:
+            QMessageBox.warning(self, "Apply to bucket", "Create and review a background candidate first.")
+            return
+        if not self.model.tiles:
+            QMessageBox.information(self, "Apply to bucket", "The bucket is empty.")
+            return
+        before = clone_tiles(self.model.tiles)
+        extraction_settings = AppSettings.from_dict(self.model.settings.to_dict())
+        extraction_settings.remove_background = False
+        try:
+            for tile in self.model.tiles:
+                rect = clamp_crop_rect(candidate.processed_image, tile.source_rect)
+                tile.image_rgba = process_crop(candidate.processed_image, rect, extraction_settings)
+                tile.source_rect = rect
+                tile.source_size = (rect[2], rect[3])
+                tile.final_size = (tile.image_rgba.width, tile.image_rgba.height)
+                tile.source_revision_id = candidate.revision_id
+        except Exception as exc:
+            self.model.tiles = before
+            QMessageBox.critical(self, "Apply to bucket failed", str(exc))
+            return
+        self._record_bucket_snapshot(before)
+        self._refresh_all(selected_index=self.bucket_panel.current_index())
+        self.statusBar().showMessage(
+            f"Applied candidate revision {candidate.revision_id[:8]} to {len(self.model.tiles)} bucket tile(s)."
+        )
 
     def _save_project(self) -> None:
         if self.source_image is None or not self.model.source_image_path:
