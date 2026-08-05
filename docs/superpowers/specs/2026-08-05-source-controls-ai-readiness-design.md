@@ -76,9 +76,52 @@ The dialog stays open at completion and presents a persistent summary rather tha
 
 On failure it shows the failed stage, a concise reason, `Retry`, and `View details`/copyable diagnostics. Partial installation remains represented accurately as `Model only` or `Repair required`; it is never labeled ready.
 
+Installation is deliberately non-cancellable because the current download, virtual-environment, and package-install operations are not safely interruptible. While any installation stage is active:
+
+- the dialog Close button and window close action are disabled;
+- attempts to close the dialog explain that setup must finish or fail first;
+- application shutdown is refused with the same explanation;
+- each operation has a bounded timeout so this policy cannot trap the user indefinitely: network connect/read timeout, environment-creation timeout, package-install timeout, and health-check timeout;
+- timeouts become ordinary failed-stage results and restore Close/Retry controls.
+
+The model download remains atomic and removes its temporary file on failure. Environment creation/package installation uses a managed staging directory and promotes it to the final runtime directory only after packages install successfully. A failed staging directory is removed only after ownership/path validation. If the model succeeded but the environment failed, the stable state is accurately reported as `Model only`.
+
 ## Health-check contract
 
-Disk markers remain useful installation evidence but are not sufficient for readiness. The worker protocol gains a health-check request carrying the provider ID, model ID/path, and compute preference. The isolated worker must:
+Disk markers remain useful installation evidence but are not sufficient for readiness. The worker protocol gains these concrete messages:
+
+```text
+request:
+  protocol_version: 1
+  message_type: "health_check"
+  request_id: non-empty unique string
+  provider_id: "rembg" | "ben2"
+  model_id: manifest model identifier
+  model_path: absolute managed model path
+  compute: "auto" | "cuda" | "cpu"
+
+success:
+  protocol_version: 1
+  message_type: "health_result"
+  request_id: copied from request
+  provider_id: copied from request
+  model_id: copied from request
+  status: "ready"
+  backend: "cuda" | "cpu"
+  warnings: list of strings
+
+failure:
+  protocol_version: 1
+  message_type: "error"
+  request_id: copied from request
+  provider_id: copied when validated
+  error_code: stable code
+  message: actionable summary
+```
+
+Stable health error codes are `provider_import_failed`, `model_missing`, `model_invalid`, `runtime_unavailable`, `backend_unavailable`, `initialization_failed`, `health_timeout`, and `protocol_error`. The worker preserves the request ID on every response, including exception paths. Unknown IDs or response types are protocol errors and cannot mark an engine ready.
+
+For a health request, the isolated worker must:
 
 - import the requested provider;
 - validate that the expected model exists and is non-empty;
@@ -86,9 +129,26 @@ Disk markers remain useful installation evidence but are not sufficient for read
 - return the effective backend and warnings;
 - return a structured failure when imports, DLLs, packages, model files, or backend initialization fail.
 
-The health check runs off the UI thread. After installation it runs immediately. On later application launches, installed runtimes are checked asynchronously; the source panel shows `Checking…` until each result arrives. A verified engine is then registered with `SourceProcessingService` and enabled in the engine selector.
+The health check runs off the UI thread with a fixed timeout. Its dedicated worker process is closed in `finally` after success, failure, timeout, stale result, or application shutdown. A timeout forcibly terminates that health worker before emitting `health_timeout`.
+
+One `OptionalEngineCoordinator` owned by `MainWindow` is the sole owner of readiness state and in-flight probes. Readiness is keyed by `(runtime_id, compute_preference)`, and only one probe for a key may run at once. Both startup discovery and `ModelManagerDialog` request work through this coordinator; the dialog never runs a second private probe. The manager emits installation completion to the coordinator, then observes the coordinator's staged/readiness signals for its selected runtime. `MainWindow` observes those same signals to update the source panel and register engines. Each probe carries a generation token so a late result from an older compute preference or repaired runtime is discarded and its worker closed.
+
+After installation the coordinator verifies immediately. On later application launches, installed runtimes are checked asynchronously; the source panel shows `Checking…` until each result arrives. A verified engine is then registered with `SourceProcessingService` and enabled in the engine selector.
 
 Health-check workers may exit after verification. The inference worker remains lazy and starts when the user runs the engine, avoiding permanent RAM/VRAM use. In this design, `Ready` means verified and callable—not continuously consuming resources.
+
+## Compute preference
+
+The Source Background panel's Compute selection is the authoritative preference. Opening model setup initializes the manager to that value. Readiness for Auto, CUDA, or CPU is not interchangeable:
+
+- changing Compute invalidates the displayed readiness result for installed AI engines;
+- the selected AI engine remains visible but Run is disabled while the coordinator re-verifies it;
+- a new result is accepted only if its compute preference and generation still match the panel;
+- `Auto` may verify as CUDA or CPU and must display the effective backend plus any fallback warning;
+- `CUDA only` fails with `backend_unavailable` if CUDA cannot initialize;
+- `CPU only` constructs the provider with CPU-only execution providers.
+
+rembg and BEN2 use the same backend-selection contract in health checks and inference. The rembg worker must no longer ignore `compute`: CPU passes only `CPUExecutionProvider`; CUDA requires and initializes `CUDAExecutionProvider`; Auto uses the shared selection/fallback rules. The backend verified for a given preference is the backend shown to the user and used to construct that inference-engine registration.
 
 ## Successful activation and first run
 
@@ -114,20 +174,24 @@ Because engines run in isolated processes and are registered dynamically, instal
 - `SourceBackgroundPanel` renders linked threshold controls and per-provider readiness states. It emits setup/manage and run requests but performs no downloads or probes.
 - `ModelManagerDialog` coordinates user-approved installation, stage progress, retry, and diagnostics. It does not directly mutate the source image.
 - `RuntimeRegistry` remains the authority for manifests, managed paths, marker validation, and disk installation state.
+- `OptionalEngineCoordinator` deduplicates asynchronous health checks, owns compute-keyed readiness/generation state, and publishes the single authoritative result stream to the dialog and main window.
 - The isolated worker owns provider imports, session/model initialization, and backend probing.
 - `MainWindow` coordinates asynchronous readiness results, engine registration, selection, status messages, and the existing candidate-processing action.
 
 Provider IDs remain stable (`rembg`, `ben2`) while runtime IDs remain manifest-specific (`rembg-onnx`, `ben2-base-onnx`). Mapping is always read from manifest metadata rather than guessed from labels.
 
+`MainWindow` also owns inference-engine replacement. Replacing, disabling, or repairing a registered engine closes the old `IsolatedAIWorkerEngine` so its child process cannot leak. If a source-processing job is active, the current engine remains owned by that job and the new readiness result is queued; replacement and old-engine disposal occur only after the job completes, fails, or is cancelled. Application shutdown stops accepting probe results, terminates all health workers, refuses to close while a model installation is active, lets the existing source job follow its current cancellation lifecycle, and closes every registered optional inference engine.
+
 ## Error handling
 
-- Closing the manager during an active install is blocked or requires explicit cancellation confirmation; it must not make the install look successful.
+- Closing the manager or application during an active install is blocked until the bounded task finishes or fails; it must not make the install look successful.
 - A failed checksum remains a download failure and leaves no final model file.
 - A package-install failure preserves diagnostics and offers repair without deleting unrelated user data.
 - A health-check timeout terminates its worker and becomes `Repair required` with retry.
 - CUDA failure under `Auto` may return a visible warning and a verified CPU fallback. CUDA-only failure is not silently downgraded.
 - Selecting an engine whose readiness was lost disables Run and returns it to `Checking…` or `Repair required`.
 - All status text is meaningful without relying on color alone.
+- Stale health results caused by compute changes, repairs, or shutdown are discarded without mutating engine availability.
 
 ## Verification
 
@@ -139,9 +203,15 @@ Automated coverage should include:
 - the model manager reports each installation stage and keeps the final message visible;
 - model-only installation does not enable an engine;
 - successful health check reports CPU/CUDA, enables and selects the engine, and updates the Run label;
+- Compute changes invalidate prior readiness, disable Run during re-verification, initialize setup with the panel preference, and reject stale results;
+- rembg and BEN2 both honor Auto, CPU-only, and CUDA-only during health check and inference;
 - worker import, model, backend, timeout, and package-install failures map to actionable states;
 - Auto visibly falls back to CPU while CUDA-only remains a failure;
 - installed engines are checked asynchronously at startup without blocking the UI;
+- model-manager installation completion reaches `MainWindow` through the coordinator once, without a duplicate probe;
+- dialog and application closing are blocked during download, environment creation, package installation, and verification, then restored after success/failure;
+- every health-worker success, failure, timeout, and stale result closes the health process;
+- replacing or repairing a running engine defers replacement until the active source job settles, then closes the old engine;
 - a ready engine with no source gives open-source guidance;
 - a ready engine with a source runs only after explicit user action and creates a candidate;
 - restart is not requested after ordinary successful hot registration;
