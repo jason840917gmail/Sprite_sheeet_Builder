@@ -14,6 +14,8 @@ Processing never overwrites the original source. A completed result is a candida
 - **To Bucket** rebuilds the existing image tiles from the candidate in one undoable operation. It does not activate the candidate globally.
 - **Discard** archives the candidate and returns the panel to the original-source state.
 
+If a candidate still has small defects, switch to **Paint Cleanup** (`B`). Source Preview strokes update the same review candidate without touching the immutable original. Use **Erase**, **Paint Color**, or **Clone Color**; Alt-click a clean pixel before cloning. To repair only an extracted result, choose **Selected Bucket Tile** instead; each stroke is recorded as one undoable bucket change.
+
 ## GPU behavior
 
 The app probes for NVIDIA CUDA support when an optional AI runtime is used. **Auto** chooses CUDA when the provider and device are usable, then falls back to CPU. Choose **CUDA only** when a CPU fallback would hide a configuration problem; choose **CPU only** for maximum compatibility.

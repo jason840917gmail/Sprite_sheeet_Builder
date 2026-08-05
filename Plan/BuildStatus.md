@@ -29,6 +29,7 @@ Updated: 2026-08-05
 
 - Added an indexed Markdown help library in `help/`, available from the Help toolbar button, the Help menu, and `F1`.
 - Added compact Source Background action labels with descriptive hover tooltips; the panel's Detect control now performs source-border detection directly.
+- Added a Paint Cleanup tool with Erase, Paint Color, and Clone Color modes. It can edit a source review candidate or the selected bucket tile; source edits require explicit activation, while bucket strokes are undoable.
 
 - Created Python package structure under `sprite_sheet_cleaner/`.
 - Added core dataclasses:
@@ -111,7 +112,7 @@ Updated: 2026-08-05
 ## Verified
 
 - `python -m unittest discover -s sprite_sheet_cleaner\tests`
-- Passed: 118 tests; 19 Qt tests skipped because PySide6 is not installed in the current runtime.
+- Passed: 122 tests; 19 Qt tests skipped because PySide6 is not installed in the current runtime.
 - `python -m compileall -q sprite_sheet_cleaner`
   - Passed
 - `.venv` offscreen Qt layout smoke test

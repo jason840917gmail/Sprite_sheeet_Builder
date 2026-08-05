@@ -7,8 +7,9 @@
 3. Use **Select** to place a tile-sized selection, or **Grid** to work with an evenly divided source sheet.
 4. Review the source background settings. Background processing creates a candidate first, so the original remains safe.
 5. Add selections to the bucket. You can rename, duplicate, reorder, delete, or clear tiles.
-6. Check the transparent sheet in **Final Tilesheet Preview**.
-7. Export the sheet or individual tiles as PNG files.
+6. If an edge needs cleanup, press `B` for **Paint Cleanup**. Choose a source review copy or a selected bucket tile, then use Erase, Paint Color, or Clone Color.
+7. Check the transparent sheet in **Final Tilesheet Preview**.
+8. Export the sheet or individual tiles as PNG files.
 
 ## Safe background-removal workflow
 

@@ -16,6 +16,10 @@ def create_grid_icon(size: int = 24) -> QIcon:
     return _paint_icon(size, _draw_grid_icon)
 
 
+def create_retouch_icon(size: int = 24) -> QIcon:
+    return _paint_icon(size, _draw_retouch_icon)
+
+
 def create_help_icon(size: int = 24) -> QIcon:
     return _paint_icon(size, _draw_help_icon)
 
@@ -99,6 +103,19 @@ def _draw_grid_icon(painter: QPainter, rect: QRectF) -> None:
         y = frame.top() + cell_height * step
         painter.drawLine(QPointF(x, frame.top()), QPointF(x, frame.bottom()))
         painter.drawLine(QPointF(frame.left(), y), QPointF(frame.right(), y))
+
+
+def _draw_retouch_icon(painter: QPainter, rect: QRectF) -> None:
+    painter.setPen(QPen(QColor(225, 241, 255, 235), 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    painter.drawLine(
+        QPointF(rect.left() + 5.0, rect.bottom() - 5.0),
+        QPointF(rect.right() - 6.0, rect.top() + 6.0),
+    )
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(255, 178, 72, 235))
+    painter.drawEllipse(QRectF(rect.left() + 3.0, rect.bottom() - 8.0, 6.0, 6.0))
+    painter.setBrush(QColor(31, 143, 255, 220))
+    painter.drawRoundedRect(QRectF(rect.right() - 9.0, rect.top() + 3.0, 6.0, 6.0), 1.5, 1.5)
 
 
 def _draw_help_icon(painter: QPainter, rect: QRectF) -> None:

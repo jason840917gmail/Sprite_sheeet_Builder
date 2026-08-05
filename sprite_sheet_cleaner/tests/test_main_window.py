@@ -35,6 +35,7 @@ class MainWindowTests(unittest.TestCase):
             self.assertFalse(window.pointer_action.icon().isNull())
             self.assertFalse(window.select_action.icon().isNull())
             self.assertFalse(window.grid_action.icon().isNull())
+            self.assertFalse(window.retouch_action.icon().isNull())
         finally:
             window.close()
 

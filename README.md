@@ -50,8 +50,9 @@ pip install -r sprite_sheet_cleaner\requirements.txt
 6. Video mode uses full frames; the image workflow's Tile/Selection size, Selection grid, and Grid tool do not control video imports.
 7. Use the Pointer tool to pan around the video frame. `WASD` also pans the view.
 8. Drag bucket items to reorder them, or use the bucket controls to rename, duplicate, delete, or clear tiles.
-9. Adjust Final tilesheet rows and columns in the Video Tool panel if the bucket needs more output slots.
-10. Preview the sheet inline or open the larger modal Animation Preview to inspect playback and timing. In video mode it plays only the selected frames from the active video tab, preserving their bucket order.
-11. Optionally export frame metadata JSON for game-engine integration. Multi-video projects save and restore their tabs, sampling settings, selections, and frame sources.
+9. Use the **Paint** tool (`B`) when a removal needs cleanup. Choose Erase, Paint Color, or Clone Color, then target the Source Preview or Selected Bucket Tile. Source strokes are review candidates; bucket strokes are undoable.
+10. Adjust Final tilesheet rows and columns in the Video Tool panel if the bucket needs more output slots.
+11. Preview the sheet inline or open the larger modal Animation Preview to inspect playback and timing. In video mode it plays only the selected frames from the active video tab, preserving their bucket order.
+12. Optionally export frame metadata JSON for game-engine integration. Multi-video projects save and restore their tabs, sampling settings, selections, and frame sources.
 
 Use the **Help** toolbar button, **Help** menu, or `F1` to browse the indexed Markdown guides in [`help/`](help/).

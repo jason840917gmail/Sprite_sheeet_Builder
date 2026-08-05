@@ -26,7 +26,7 @@ from sprite_sheet_cleaner.app.core.grid_geometry import (
 )
 
 
-ViewerTool = Literal["pointer", "select", "grid"]
+ViewerTool = Literal["pointer", "select", "grid", "retouch"]
 
 
 class RulerWidget(QWidget):
@@ -116,6 +116,10 @@ class SourceViewer(QGraphicsView):
     toolChanged = Signal(str)
     gridCellClicked = Signal(object)
     gridStatusChanged = Signal(object)
+    retouchPressed = Signal(object)
+    retouchDragged = Signal(object)
+    retouchReleased = Signal()
+    retouchSampleRequested = Signal(object)
 
     RULER_HEIGHT = 32
     RULER_WIDTH = 56
@@ -212,6 +216,7 @@ class SourceViewer(QGraphicsView):
         self._grid_selection_range: tuple[int, int, int, int] | None = None
         self._placing_selection = False
         self._panning = False
+        self._retouching = False
         self._pan_origin = QPoint()
         self._pan_h_value = 0
         self._pan_v_value = 0
@@ -246,10 +251,11 @@ class SourceViewer(QGraphicsView):
         return self._tool
 
     def set_tool(self, tool: ViewerTool) -> None:
-        if tool not in ("pointer", "select", "grid"):
+        if tool not in ("pointer", "select", "grid", "retouch"):
             raise ValueError(f"Unknown source viewer tool: {tool}")
         if tool != self._tool:
             self.clear_selection()
+            self._retouching = False
         self._tool = tool
         self._update_cursor()
         self._rebuild_grid()
@@ -353,6 +359,21 @@ class SourceViewer(QGraphicsView):
         self.reset_zoom()
         self._update_tool_hint()
 
+    def refresh_image(self, image: QImage) -> None:
+        """Refresh pixels without resetting zoom, pan, or the current selection."""
+        pixmap = QPixmap.fromImage(image)
+        previous_size = self._image_size
+        self._pixmap_item.setPixmap(pixmap)
+        self._image_size = (pixmap.width(), pixmap.height())
+        if self._image_size != previous_size:
+            self._grid_origin = (0, 0)
+            self._update_scene_rect()
+            self._rebuild_grid()
+        else:
+            self._update_scene_rect()
+            self._update_rulers()
+        self._update_tool_hint()
+
     def clear_selection(self) -> None:
         self._grid_selecting = False
         self._grid_select_dragging = False
@@ -435,6 +456,16 @@ class SourceViewer(QGraphicsView):
             return
 
         if event.button() == Qt.LeftButton:
+            if self._tool == "retouch":
+                point = self._clamped_scene_point(self._event_pos(event))
+                point_tuple = (round(point.x()), round(point.y()))
+                if event.modifiers() & Qt.AltModifier:
+                    self.retouchSampleRequested.emit(point_tuple)
+                else:
+                    self._retouching = True
+                    self.retouchPressed.emit(point_tuple)
+                event.accept()
+                return
             if self._tool == "pointer":
                 self._start_pan(event)
             elif self._tool == "grid":
@@ -461,6 +492,12 @@ class SourceViewer(QGraphicsView):
         if self.has_image():
             scene_point = self._clamped_scene_point(self._event_pos(event))
             self.cursorPositionChanged.emit(round(scene_point.x()), round(scene_point.y()))
+
+        if self._retouching:
+            scene_point = self._clamped_scene_point(self._event_pos(event))
+            self.retouchDragged.emit((round(scene_point.x()), round(scene_point.y())))
+            event.accept()
+            return
 
         if self._placing_selection:
             self._place_fixed_selection(self._event_pos(event))
@@ -492,6 +529,13 @@ class SourceViewer(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._retouching:
+            self._retouching = False
+            self.retouchReleased.emit()
+            self._update_cursor()
+            event.accept()
+            return
+
         if event.button() == Qt.LeftButton and self._grid_selecting:
             self._finish_grid_selection(self._event_pos(event))
             event.accept()
@@ -773,6 +817,8 @@ class SourceViewer(QGraphicsView):
             self.setCursor(Qt.OpenHandCursor)
         elif self._tool == "grid":
             self.setCursor(Qt.PointingHandCursor)
+        elif self._tool == "retouch":
+            self.setCursor(Qt.CrossCursor)
         else:
             self.setCursor(Qt.CrossCursor)
 
@@ -998,6 +1044,8 @@ class SourceViewer(QGraphicsView):
             return "Left click: place selection\nArrow keys: nudge 1px\nSpace: add to bucket\nEsc: clear selection\nWASD: pan view"
         if self._tool == "grid":
             return "Left click: add tile\nLeft drag: select tiles\nRight-click drag: move grid\nArrow keys: nudge 1px\nWASD: pan view"
+        if self._tool == "retouch":
+            return "Left drag: paint cleanup\nAlt-click: set Clone Color source\nWASD: pan view"
         return None
 
     def _update_rulers(self) -> None:
