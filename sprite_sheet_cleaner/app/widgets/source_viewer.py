@@ -8,6 +8,7 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, 
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsPathItem,
+    QGraphicsEllipseItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -134,6 +135,7 @@ class SourceViewer(QGraphicsView):
         self._grid_hover_item = QGraphicsRectItem()
         self._selection_item = QGraphicsRectItem()
         self._selection_grid_item = QGraphicsPathItem()
+        self._retouch_cursor_item = QGraphicsEllipseItem()
 
         grid_pen = QPen(QColor(90, 210, 255, 220), 1)
         grid_pen.setCosmetic(True)
@@ -178,6 +180,14 @@ class SourceViewer(QGraphicsView):
         self._grid_hover_item.setZValue(4)
         self._selection_item.setZValue(5)
         self._selection_grid_item.setZValue(6)
+        self._retouch_cursor_item.setZValue(7)
+        retouch_pen = QPen(QColor(125, 235, 255, 235), 1.5)
+        retouch_pen.setCosmetic(True)
+        self._retouch_cursor_item.setPen(retouch_pen)
+        self._retouch_cursor_item.setBrush(QBrush(QColor(90, 210, 255, 38)))
+        self._retouch_cursor_item.setAcceptedMouseButtons(Qt.NoButton)
+        self._retouch_cursor_item.setAcceptHoverEvents(False)
+        self._retouch_cursor_item.setVisible(False)
 
         self._scene.addItem(self._pixmap_item)
         self._scene.addItem(self._grid_added_item)
@@ -186,6 +196,7 @@ class SourceViewer(QGraphicsView):
         self._scene.addItem(self._grid_hover_item)
         self._scene.addItem(self._selection_item)
         self._scene.addItem(self._selection_grid_item)
+        self._scene.addItem(self._retouch_cursor_item)
         self.setScene(self._scene)
 
         self.setMouseTracking(True)
@@ -217,6 +228,8 @@ class SourceViewer(QGraphicsView):
         self._placing_selection = False
         self._panning = False
         self._retouching = False
+        self._retouch_brush_diameter = 24
+        self._retouch_cursor_scene: QPointF | None = None
         self._pan_origin = QPoint()
         self._pan_h_value = 0
         self._pan_v_value = 0
@@ -257,6 +270,8 @@ class SourceViewer(QGraphicsView):
             self.clear_selection()
             self._retouching = False
         self._tool = tool
+        if tool != "retouch":
+            self._hide_retouch_cursor()
         self._update_cursor()
         self._rebuild_grid()
         self._update_tool_hint()
@@ -353,6 +368,7 @@ class SourceViewer(QGraphicsView):
         self._pixmap_item.setPixmap(pixmap)
         self._image_size = (pixmap.width(), pixmap.height())
         self._grid_origin = (0, 0)
+        self._hide_retouch_cursor()
         self._update_scene_rect()
         self.clear_selection()
         self._rebuild_grid()
@@ -372,7 +388,36 @@ class SourceViewer(QGraphicsView):
         else:
             self._update_scene_rect()
             self._update_rulers()
+        self._update_retouch_cursor_geometry()
         self._update_tool_hint()
+
+    def set_retouch_brush_size(self, diameter: int) -> None:
+        self._retouch_brush_diameter = max(1, int(diameter))
+        self._update_retouch_cursor_geometry()
+
+    def _show_retouch_cursor(self, scene_point: QPointF) -> None:
+        if self._tool != "retouch" or not self.has_image():
+            self._hide_retouch_cursor()
+            return
+        self._retouch_cursor_scene = QPointF(scene_point)
+        self._update_retouch_cursor_geometry()
+        self._retouch_cursor_item.setVisible(True)
+        self._update_cursor()
+
+    def _hide_retouch_cursor(self) -> None:
+        self._retouch_cursor_scene = None
+        self._retouch_cursor_item.setVisible(False)
+        self._update_cursor()
+
+    def _update_retouch_cursor_geometry(self) -> None:
+        if self._retouch_cursor_scene is None:
+            return
+        diameter = float(self._retouch_brush_diameter)
+        center = self._retouch_cursor_scene
+        self._retouch_cursor_item.setRect(
+            QRectF(center.x() - diameter / 2.0, center.y() - diameter / 2.0, diameter, diameter)
+        )
+        self._retouch_cursor_item.setVisible(self._tool == "retouch" and self.has_image())
 
     def clear_selection(self) -> None:
         self._grid_selecting = False
@@ -458,6 +503,7 @@ class SourceViewer(QGraphicsView):
         if event.button() == Qt.LeftButton:
             if self._tool == "retouch":
                 point = self._clamped_scene_point(self._event_pos(event))
+                self._show_retouch_cursor(point)
                 point_tuple = (round(point.x()), round(point.y()))
                 if event.modifiers() & Qt.AltModifier:
                     self.retouchSampleRequested.emit(point_tuple)
@@ -492,6 +538,8 @@ class SourceViewer(QGraphicsView):
         if self.has_image():
             scene_point = self._clamped_scene_point(self._event_pos(event))
             self.cursorPositionChanged.emit(round(scene_point.x()), round(scene_point.y()))
+            if self._tool == "retouch":
+                self._show_retouch_cursor(scene_point)
 
         if self._retouching:
             scene_point = self._clamped_scene_point(self._event_pos(event))
@@ -621,6 +669,7 @@ class SourceViewer(QGraphicsView):
 
     def leaveEvent(self, event) -> None:
         self._set_grid_hover_cell(None)
+        self._hide_retouch_cursor()
         super().leaveEvent(event)
 
     def _zoom_by(self, factor: float) -> None:
@@ -818,7 +867,7 @@ class SourceViewer(QGraphicsView):
         elif self._tool == "grid":
             self.setCursor(Qt.PointingHandCursor)
         elif self._tool == "retouch":
-            self.setCursor(Qt.CrossCursor)
+            self.setCursor(Qt.BlankCursor if self._retouch_cursor_item.isVisible() else Qt.CrossCursor)
         else:
             self.setCursor(Qt.CrossCursor)
 

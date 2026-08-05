@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._create_actions()
         self._connect_signals()
+        self.source_viewer.set_retouch_brush_size(self.retouch_panel.brush_size.value())
         self._refresh_all()
 
     def _build_layout(self) -> None:
@@ -351,6 +352,7 @@ class MainWindow(QMainWindow):
         self.video_settings_panel.applyToBucketRequested.connect(self._apply_video_settings_to_bucket)
         self.retouch_panel.modeChanged.connect(self._retouch_mode_changed)
         self.retouch_panel.targetChanged.connect(self._retouch_target_changed)
+        self.retouch_panel.brush_size.valueChanged.connect(self.source_viewer.set_retouch_brush_size)
         self.final_preview.animationRequested.connect(self._open_animation_preview)
         self.bucket_panel.deleteRequested.connect(self._delete_tile)
         self.bucket_panel.clearRequested.connect(self._clear_bucket)
@@ -495,6 +497,7 @@ class MainWindow(QMainWindow):
     def _activate_video_document(self, document: VideoDocument, *, show_frame: bool = True) -> None:
         self._bucket_preview_active = False
         self._source_preview_override = None
+        self._reset_retouch_state()
         self.frame_browser = document.browser
         self.source_type = "video"
         self.video_source_path = document.path
@@ -564,6 +567,7 @@ class MainWindow(QMainWindow):
         self.video_metadata = None
         self.source_image = None
         self._source_preview_override = None
+        self._reset_retouch_state()
         self.model.source_type = "image"
         self.model.source_image_path = None
         self.model.video_metadata = None
@@ -594,6 +598,7 @@ class MainWindow(QMainWindow):
 
         self._bucket_preview_active = False
         self._source_preview_override = None
+        self._reset_retouch_state()
         self._clear_video_documents()
         self.source_type = "image"
         self.video_source_path = None
@@ -668,6 +673,7 @@ class MainWindow(QMainWindow):
         processed_image = getattr(candidate, "processed_image", None)
         if isinstance(processed_image, Image.Image):
             self._source_preview_override = processed_image.copy()
+            self._reset_retouch_state()
             self.source_viewer.set_image(pil_to_qimage(self._source_preview_override))
             self._apply_selection_geometry()
         revision_id = getattr(candidate, "revision_id", "unknown")
@@ -702,6 +708,7 @@ class MainWindow(QMainWindow):
             return
         self.source_image = revision.processed_image.copy()
         self._source_preview_override = None
+        self._reset_retouch_state()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
         self.model.settings.remove_background = False
         self.source_background_panel.set_candidate_state(False, f"Revision {revision.revision_id[:8]} is active.")
@@ -710,6 +717,7 @@ class MainWindow(QMainWindow):
     def _discard_source_candidate(self) -> None:
         self.source_repository.discard_candidate()
         self._source_preview_override = None
+        self._reset_retouch_state()
         active = self.source_repository.document.active_revision
         state = f"Revision {active.revision_id[:8]} is active." if active is not None else "Original source is active"
         self.source_background_panel.set_candidate_state(False, state)
@@ -812,6 +820,7 @@ class MainWindow(QMainWindow):
                 self._cache_video_frame(document, ref.index, image)
             self.source_image = image
             self._source_preview_override = None
+            self._reset_retouch_state()
             document.current_ref = ref
             self._current_frame_ref = ref
             self.source_viewer.set_image(pil_to_qimage(image))
@@ -1749,10 +1758,7 @@ class MainWindow(QMainWindow):
                 return
 
         self._retouch_target = target
-        self._retouch_clone_origin = None
-        self._retouch_clone_anchor = None
-        self._retouch_clone_snapshot = None
-        self._retouch_work_image = None
+        self._reset_retouch_state()
         self._retouch_bucket_index = None
         if target == "bucket":
             index = self.bucket_panel.current_index()
@@ -1791,6 +1797,15 @@ class MainWindow(QMainWindow):
         image = self._source_preview_override or self.source_image
         return image
 
+    def _reset_retouch_state(self) -> None:
+        self._retouch_clone_origin = None
+        self._retouch_clone_anchor = None
+        self._retouch_clone_snapshot = None
+        self._retouch_work_image = None
+        self._retouch_stroke_before = None
+        self._retouch_stroke_before_image = None
+        self._retouch_stroke_changed = False
+
     def _retouch_mode_changed(self, _mode: str) -> None:
         self._retouch_clone_origin = None
         self._retouch_clone_snapshot = None
@@ -1806,13 +1821,22 @@ class MainWindow(QMainWindow):
             return
         if not isinstance(point, tuple) or len(point) != 2:
             return
-        if self._retouch_image() is None:
+        self._sample_retouch_color((int(point[0]), int(point[1])))
+
+    def _sample_retouch_color(self, point: tuple[int, int]) -> bool:
+        image = self._retouch_image()
+        if image is None or image.width <= 0 or image.height <= 0:
             self.retouch_panel.set_status("Open an image or select a bucket tile first.")
-            return
-        self._retouch_clone_origin = (int(point[0]), int(point[1]))
+            return False
+        x = min(max(int(point[0]), 0), image.width - 1)
+        y = min(max(int(point[1]), 0), image.height - 1)
+        red, green, blue, _alpha = image.convert("RGBA").getpixel((x, y))
+        self._retouch_clone_origin = (x, y)
+        self.retouch_panel.set_color((red, green, blue))
         self.retouch_panel.set_status(
-            f"Clone source set at ({self._retouch_clone_origin[0]}, {self._retouch_clone_origin[1]}). Drag to paint."
+            f"Clone source set at ({x}, {y}) - sampled #{red:02X}{green:02X}{blue:02X}. Drag to paint."
         )
+        return True
 
     def _retouch_pressed(self, point: object) -> None:
         if not isinstance(point, tuple) or len(point) != 2:
@@ -1823,7 +1847,7 @@ class MainWindow(QMainWindow):
             return
         mode = self.retouch_panel.current_mode()
         if mode == "clone" and self._retouch_clone_origin is None:
-            self.retouch_panel.set_status("Alt-click a clone source point first, then drag over the damaged area.")
+            self._sample_retouch_color((int(point[0]), int(point[1])))
             return
         self._retouch_stroke_changed = False
         self._retouch_clone_anchor = (int(point[0]), int(point[1]))
@@ -2021,6 +2045,14 @@ class MainWindow(QMainWindow):
             self._prepare_retouch_target(self.retouch_panel.current_target())
         else:
             self.select_action.setChecked(True)
+            if self.source_type == "video":
+                self.right_panel_stack.setCurrentWidget(self.video_settings_panel)
+            else:
+                self.right_panel_stack.setCurrentWidget(self.settings_panel)
+        if tool != "retouch":
+            self.right_panel_stack.setCurrentWidget(
+                self.video_settings_panel if self.source_type == "video" else self.settings_panel
+            )
         self._refresh_action_context()
         self._update_status()
 

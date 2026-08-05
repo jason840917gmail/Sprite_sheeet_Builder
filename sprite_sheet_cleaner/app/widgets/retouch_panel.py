@@ -99,6 +99,13 @@ class RetouchPanel(QWidget):
     def color(self) -> tuple[int, int, int]:
         return self._color
 
+    def set_color(self, color: tuple[int, int, int]) -> None:
+        """Set the paint swatch from an RGB sample taken in the preview."""
+        if len(color) != 3:
+            raise ValueError("Paint color must contain exactly three RGB channels")
+        self._color = tuple(max(0, min(255, int(channel))) for channel in color)
+        self._update_color_button()
+
     def set_target_available(self, target_id: str, available: bool) -> None:
         for index in range(self.target.count()):
             if self.target.itemData(index) == target_id:

@@ -8,17 +8,20 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PIL import Image
 
 try:
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QApplication
     from sprite_sheet_cleaner.app.main_window import MainWindow
     from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
     from sprite_sheet_cleaner.app.widgets.retouch_panel import RetouchPanel
     from sprite_sheet_cleaner.app.widgets.source_background_panel import SourceBackgroundPanel
+    from sprite_sheet_cleaner.app.widgets.source_viewer import SourceViewer
 except ImportError:
     QApplication = None
     MainWindow = None
     RetouchPanel = None
     SourceBackgroundPanel = None
+    SourceViewer = None
     pil_to_qimage = None
 
 
@@ -106,6 +109,64 @@ class PaintBucketTargetTests(unittest.TestCase):
             window._undo_bucket()
             self.assertEqual(window.model.tiles[0].image_rgba.tobytes(), before.tobytes())
             self.assertEqual(window.source_viewer.image_size(), before.size)
+        finally:
+            window.close()
+
+
+@unittest.skipUnless(QApplication is not None and SourceViewer is not None, "PySide6 is not installed")
+class RetouchCursorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_brush_cursor_uses_image_sized_footprint_and_hides_crosshair(self) -> None:
+        viewer = SourceViewer()
+        try:
+            viewer.set_image(QImage(64, 64, QImage.Format_RGBA8888))
+            viewer.set_tool("retouch")
+            viewer.set_retouch_brush_size(20)
+            viewer._show_retouch_cursor(QPointF(24, 30))
+
+            self.assertTrue(viewer._retouch_cursor_item.isVisible())
+            self.assertAlmostEqual(viewer._retouch_cursor_item.rect().width(), 20.0)
+            self.assertEqual(viewer.cursor().shape(), Qt.BlankCursor)
+
+            viewer.set_tool("select")
+            self.assertFalse(viewer._retouch_cursor_item.isVisible())
+            self.assertEqual(viewer.cursor().shape(), Qt.CrossCursor)
+        finally:
+            viewer.close()
+
+
+@unittest.skipUnless(QApplication is not None and MainWindow is not None, "PySide6 is not installed")
+class CloneSamplingAndPanelTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_first_clone_click_samples_color_without_creating_undo(self) -> None:
+        window = MainWindow()
+        try:
+            source = Image.new("RGBA", (4, 4), (20, 30, 40, 255))
+            source.putpixel((1, 1), (12, 34, 56, 255))
+            window.source_image = source
+            window.source_viewer.set_image(pil_to_qimage(source))
+            window._set_viewer_tool("retouch")
+            window.retouch_panel.mode.setCurrentIndex(2)
+
+            window._retouch_pressed((1, 1))
+            window._retouch_released()
+
+            self.assertEqual(window.retouch_panel.color(), (12, 34, 56))
+            self.assertEqual(window._retouch_clone_origin, (1, 1))
+            self.assertFalse(window.command_stack.can_undo)
+
+            window._set_viewer_tool("select")
+            self.assertIs(window.right_panel_stack.currentWidget(), window.settings_panel)
+            window.source_type = "video"
+            window._set_viewer_tool("retouch")
+            window._set_viewer_tool("pointer")
+            self.assertIs(window.right_panel_stack.currentWidget(), window.video_settings_panel)
         finally:
             window.close()
 

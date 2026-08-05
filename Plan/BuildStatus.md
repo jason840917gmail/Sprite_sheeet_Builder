@@ -31,6 +31,8 @@ Updated: 2026-08-05
 - Added compact Source Background action labels with descriptive hover tooltips; the panel's Detect control now performs source-border detection directly.
 - Converted Paint Cleanup brush controls and Source Background threshold controls to horizontal sliders with visible values; Paint bucket clicks now select and preview the tile automatically.
 - Added a Paint Cleanup tool with Erase, Paint Color, and Clone Color modes. It can edit a source review candidate or the selected bucket tile; source edits require explicit activation, while bucket strokes are undoable.
+- Added a live image-space brush footprint that scales with zoom, hides the OS crosshair while active, and disappears on tool exit or pointer leave.
+- Clone Color now samples the clicked RGB pixel into the paint swatch and treats the first normal click as sample-only; switching away from Paint restores the Image or Video settings panel.
 
 - Created Python package structure under `sprite_sheet_cleaner/`.
 - Added core dataclasses:
@@ -113,7 +115,7 @@ Updated: 2026-08-05
 ## Verified
 
 - `python -m unittest discover -s sprite_sheet_cleaner\tests`
-- Passed: 128 tests; 23 Qt tests skipped because PySide6 is not installed in the current runtime.
+- Passed: 130 tests; 25 Qt tests skipped because PySide6 is not installed in the current runtime.
 - `python -m compileall -q sprite_sheet_cleaner`
   - Passed
 - `.venv` offscreen Qt layout smoke test
