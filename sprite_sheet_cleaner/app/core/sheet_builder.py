@@ -34,7 +34,7 @@ def build_sheet(
         x = column * settings.tile_width
         y = row * settings.tile_height
         image = tile.image_rgba.convert("RGBA")
-        sheet.paste(image, (x, y), image)
+        sheet.paste(image, (x, y))
 
     return sheet
 

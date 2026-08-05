@@ -3,6 +3,7 @@ from __future__ import annotations
 from PIL import Image
 import numpy as np
 
+from sprite_sheet_cleaner.app.core.alpha_ops import dilate_transparent_rgb, resize_premultiplied
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 
 
@@ -72,7 +73,7 @@ def scale_to_settings(image: Image.Image, settings: AppSettings) -> Image.Image:
     new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
     if new_size == image.size:
         return image
-    return image.resize(new_size, Image.Resampling.LANCZOS)
+    return resize_premultiplied(image, new_size)
 
 
 def place_on_tile_canvas(image: Image.Image, settings: AppSettings) -> Image.Image:
@@ -90,8 +91,8 @@ def place_on_tile_canvas(image: Image.Image, settings: AppSettings) -> Image.Ima
     else:
         y = (settings.tile_height - height) // 2
 
-    tile.paste(image, (x, y), image)
-    return tile
+    tile.paste(image, (x, y))
+    return dilate_transparent_rgb(tile, radius=settings.edge_bleed)
 
 
 def process_crop(

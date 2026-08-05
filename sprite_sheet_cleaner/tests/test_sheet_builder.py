@@ -50,6 +50,22 @@ class SheetBuilderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_sheet(tiles, settings)
 
+    def test_build_sheet_preserves_semitransparent_rgba(self) -> None:
+        settings = AppSettings(tile_width=2, tile_height=2, sheet_columns=1, sheet_rows=1)
+        tiles = [
+            TileItem(
+                name="soft",
+                source_rect=(0, 0, 2, 2),
+                source_size=(2, 2),
+                final_size=(2, 2),
+                image_rgba=Image.new("RGBA", (2, 2), (100, 50, 25, 128)),
+            )
+        ]
+
+        result = build_sheet(tiles, settings)
+
+        self.assertEqual(result.getpixel((0, 0)), (100, 50, 25, 128))
+
 
 if __name__ == "__main__":
     unittest.main()

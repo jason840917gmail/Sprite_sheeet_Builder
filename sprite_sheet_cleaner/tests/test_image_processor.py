@@ -5,6 +5,7 @@ import unittest
 from PIL import Image
 
 from sprite_sheet_cleaner.app.core.image_processor import (
+    place_on_tile_canvas,
     process_crop,
     remove_background_color,
     trim_transparent_edges,
@@ -43,6 +44,14 @@ class ImageProcessorTests(unittest.TestCase):
 
         self.assertEqual(result.size, (256, 256))
         self.assertGreater(result.getchannel("A").getbbox()[2], 0)
+
+    def test_tile_canvas_preserves_semitransparent_rgba(self) -> None:
+        image = Image.new("RGBA", (2, 2), (100, 50, 25, 128))
+        settings = AppSettings(tile_width=2, tile_height=2, edge_bleed=0)
+
+        result = place_on_tile_canvas(image, settings)
+
+        self.assertEqual(result.getpixel((0, 0)), (100, 50, 25, 128))
 
 
 if __name__ == "__main__":

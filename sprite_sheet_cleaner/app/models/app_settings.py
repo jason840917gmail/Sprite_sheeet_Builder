@@ -28,6 +28,7 @@ class AppSettings:
     scale_mode: ScaleMode = "none"
     padding: int = 0
     anchor: Anchor = "center"
+    edge_bleed: int = 1
 
     def validated(self) -> "AppSettings":
         if self.tile_width <= 0 or self.tile_height <= 0:
@@ -38,6 +39,8 @@ class AppSettings:
             raise ValueError("Final tilesheet dimensions must be positive.")
         if self.padding < 0:
             raise ValueError("Padding cannot be negative.")
+        if self.edge_bleed < 0:
+            raise ValueError("Edge bleed cannot be negative.")
         if self.tolerance < 0:
             raise ValueError("Tolerance cannot be negative.")
         if self.scale_mode not in VALID_SCALE_MODES:
