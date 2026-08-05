@@ -37,6 +37,10 @@ class SourceBackgroundPanel(QWidget):
         for index in (2, 3):
             self.engine.model().item(index).setEnabled(False)
         self.engine.setToolTip("Optional AI engines become available after Model Manager installation.")
+        self.compute = QComboBox()
+        self.compute.addItem("Auto (CUDA, then CPU)", "auto")
+        self.compute.addItem("NVIDIA CUDA only", "cuda")
+        self.compute.addItem("CPU only", "cpu")
 
         self.color_button = QPushButton()
         self.color_button.setFixedWidth(82)
@@ -69,6 +73,7 @@ class SourceBackgroundPanel(QWidget):
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.addRow("Engine", self.engine)
+        form.addRow("Compute", self.compute)
         form.addRow("Background", color_row)
         form.addRow("Exact tolerance", self.tolerance)
         form.addRow("Transparent threshold", self.transparent_threshold)
@@ -93,6 +98,7 @@ class SourceBackgroundPanel(QWidget):
         self.color_button.clicked.connect(self._choose_color)
         self.detect_button.clicked.connect(self._show_detection_hint)
         self.engine.currentIndexChanged.connect(self._emit_settings_changed)
+        self.compute.currentIndexChanged.connect(self._emit_settings_changed)
         self.tolerance.valueChanged.connect(self._emit_settings_changed)
         self.transparent_threshold.valueChanged.connect(self._emit_settings_changed)
         self.foreground_threshold.valueChanged.connect(self._emit_settings_changed)
@@ -102,9 +108,20 @@ class SourceBackgroundPanel(QWidget):
         self.cancel_button.clicked.connect(self.cancelRequested.emit)
         self._update_color_button()
 
+    def set_engine_available(self, engine_id: str, available: bool) -> None:
+        for index in range(self.engine.count()):
+            if self.engine.itemData(index) == engine_id:
+                item = self.engine.model().item(index)
+                if item is not None:
+                    item.setEnabled(available)
+                label = "rembg" if engine_id == "rembg" else "BEN2"
+                self.engine.setItemText(index, label if available else f"{label} (install model)")
+                return
+
     def settings(self) -> SourceProcessingSettings:
         return SourceProcessingSettings(
             engine=self.engine.currentData(),
+            compute=self.compute.currentData(),
             background_color=self._background_color,
             tolerance=self.tolerance.value(),
             transparent_threshold=self.transparent_threshold.value(),
@@ -124,6 +141,7 @@ class SourceBackgroundPanel(QWidget):
         self.apply_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
         self.engine.setEnabled(not running)
+        self.compute.setEnabled(not running)
         self.color_button.setEnabled(not running)
         self.detect_button.setEnabled(not running)
         self.tolerance.setEnabled(not running)

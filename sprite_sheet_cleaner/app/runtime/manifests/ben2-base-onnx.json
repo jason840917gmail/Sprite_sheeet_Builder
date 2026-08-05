@@ -1,0 +1,23 @@
+{
+  "runtime_id": "ben2-base-onnx",
+  "display_name": "BEN2 Base (ONNX)",
+  "package_requirements": [
+    "onnxruntime==1.28.0"
+  ],
+  "model_url": "https://huggingface.co/PramaLLC/BEN2/resolve/main/BEN2_Base.onnx",
+  "model_filename": "BEN2_Base.onnx",
+  "model_sha256": "22cea62108ff53b7ccc20f7a008bf30494228d84b1687f29ecbe76936a998101",
+  "supported_python": ["3.11", "3.12", "3.13", "3.14"],
+  "supported_backends": ["cpu", "cuda"],
+  "license_name": "MIT",
+  "download_size_bytes": 222932053,
+  "installed_size_bytes": 222932053,
+  "metadata": {
+    "provider_id": "ben2",
+    "model_id": "ben2-base-onnx",
+    "input_size": 1024,
+    "memory_guidance": "Model file is about 223 MB; inference memory is workload/provider dependent. Plan for multi-GB VRAM at 1024 input.",
+    "cuda_package": "onnxruntime-gpu==1.28.0",
+    "offline_inference": true
+  }
+}

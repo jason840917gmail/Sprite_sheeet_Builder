@@ -1,0 +1,24 @@
+{
+  "runtime_id": "rembg-onnx",
+  "display_name": "rembg + U2Net",
+  "package_requirements": [
+    "rembg==2.0.77",
+    "onnxruntime==1.28.0"
+  ],
+  "model_url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx",
+  "model_filename": "u2net.onnx",
+  "model_sha256": "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491",
+  "supported_python": ["3.11", "3.12", "3.13", "3.14"],
+  "supported_backends": ["cpu", "cuda"],
+  "license_name": "Apache-2.0 / U2Net license",
+  "download_size_bytes": 184549376,
+  "installed_size_bytes": 184549376,
+  "metadata": {
+    "provider_id": "rembg",
+    "model_id": "u2net",
+    "input_size": 320,
+    "memory_guidance": "Approximately 1-2 GB RAM depending on ONNX Runtime/provider.",
+    "cuda_package": "onnxruntime-gpu==1.28.0",
+    "offline_inference": true
+  }
+}

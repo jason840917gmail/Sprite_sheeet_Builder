@@ -19,6 +19,7 @@ from sprite_sheet_cleaner.app.core.background_detector import detect_background_
 from sprite_sheet_cleaner.app.core.export_manager import export_individual_tiles, export_sheet
 from sprite_sheet_cleaner.app.engines.exact_key import ExactKeyEngine
 from sprite_sheet_cleaner.app.engines.smart_solid import SmartSolidEngine
+from sprite_sheet_cleaner.app.engines.ai_worker_engine import IsolatedAIWorkerEngine
 from sprite_sheet_cleaner.app.core.project_model import ProjectModel
 from sprite_sheet_cleaner.app.core.sheet_builder import build_sheet, sheet_capacity
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
@@ -34,6 +35,9 @@ from sprite_sheet_cleaner.app.widgets.final_preview import FinalPreview
 from sprite_sheet_cleaner.app.widgets.settings_panel import SettingsPanel
 from sprite_sheet_cleaner.app.widgets.source_background_panel import SourceBackgroundPanel
 from sprite_sheet_cleaner.app.widgets.source_viewer import SourceViewer
+from sprite_sheet_cleaner.app.widgets.model_manager_dialog import ModelManagerDialog, default_runtime_registry
+from sprite_sheet_cleaner.app.commands.command_stack import CommandStack
+from sprite_sheet_cleaner.app.commands.bucket_commands import BucketStateCommand, clone_tiles
 
 
 class MainWindow(QMainWindow):
@@ -49,6 +53,8 @@ class MainWindow(QMainWindow):
             self.source_repository,
             {"exact_key": ExactKeyEngine(), "smart_solid": SmartSolidEngine()},
         )
+        self.runtime_registry = default_runtime_registry()
+        self.command_stack = CommandStack()
         self._source_job: JobHandle | None = None
         self.job_controller = QtJobController(self)
         self._last_mouse: tuple[int, int] | None = None
@@ -109,8 +115,16 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
+        edit_menu = self.menuBar().addMenu("&Edit")
         view_menu = self.menuBar().addMenu("&View")
         tool_menu = self.menuBar().addMenu("&Tools")
+        self.model_manager_action = QAction("Optional AI Model Manager...", self)
+        tool_menu.addAction(self.model_manager_action)
+        self.undo_action = QAction("&Undo", self)
+        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.redo_action = QAction("&Redo", self)
+        self.redo_action.setShortcut(QKeySequence.Redo)
+        edit_menu.addActions((self.undo_action, self.redo_action))
 
         self.tool_bar = QToolBar("Tools", self)
         self.tool_bar.setOrientation(Qt.Vertical)
@@ -202,6 +216,9 @@ class MainWindow(QMainWindow):
         self.add_selection_action.triggered.connect(self._add_selection_to_bucket)
         self.delete_tile_action.triggered.connect(self._delete_selected_tile)
         self.clear_selection_action.triggered.connect(self._clear_source_selection)
+        self.model_manager_action.triggered.connect(self._show_model_manager)
+        self.undo_action.triggered.connect(self._undo_bucket)
+        self.redo_action.triggered.connect(self._redo_bucket)
 
         self.source_viewer.cursorPositionChanged.connect(self._set_mouse_status)
         self.source_viewer.selectionChanged.connect(self._set_selection_status)
@@ -223,6 +240,36 @@ class MainWindow(QMainWindow):
         self.bucket_panel.moveUpRequested.connect(lambda index: self._move_tile(index, -1))
         self.bucket_panel.moveDownRequested.connect(lambda index: self._move_tile(index, 1))
         self.bucket_panel.renameRequested.connect(self._rename_tile)
+        self._refresh_optional_engines()
+
+    def _show_model_manager(self) -> None:
+        dialog = ModelManagerDialog(self.runtime_registry, compute="auto", parent=self)
+        dialog.runtimeChanged.connect(self._refresh_optional_engines)
+        dialog.exec()
+
+    def _refresh_optional_engines(self) -> None:
+        self.source_background_panel.set_engine_available("rembg", False)
+        self.source_background_panel.set_engine_available("ben2", False)
+        engines = {"exact_key": ExactKeyEngine(), "smart_solid": SmartSolidEngine()}
+        for manifest in self.runtime_registry.manifests():
+            state = self.runtime_registry.state(manifest)
+            if not (state.installed and state.environment_ready):
+                continue
+            environment = self.runtime_registry.environment_manager.environment_path(manifest)
+            python_path = self.runtime_registry.environment_manager.python_path(environment)
+            provider_id = str(manifest.metadata.get("provider_id", ""))
+            if provider_id not in {"rembg", "ben2"}:
+                continue
+            engine = IsolatedAIWorkerEngine(
+                provider_id=provider_id,
+                model_id=str(manifest.metadata.get("model_id", provider_id)),
+                model_path=state.model_path,
+                python_executable=python_path,
+                compute="auto",
+            )
+            engines[provider_id] = engine
+            self.source_background_panel.set_engine_available(provider_id, True)
+        self.source_processing_service.engines = engines
 
     def _open_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -642,7 +689,7 @@ class MainWindow(QMainWindow):
     def _delete_tile(self, index: int) -> None:
         if index < 0:
             return
-        self.model.remove_tile(index)
+        self._record_bucket_change(lambda: self.model.remove_tile(index))
         self._refresh_all(selected_index=min(index, len(self.model.tiles) - 1))
 
     def _clear_bucket(self) -> None:
@@ -661,7 +708,7 @@ class MainWindow(QMainWindow):
         )
         if not confirmed:
             return
-        self.model.clear_tiles()
+        self._record_bucket_change(self.model.clear_tiles)
         self._refresh_all()
         self.statusBar().showMessage("Cleared bucket")
 
@@ -671,14 +718,18 @@ class MainWindow(QMainWindow):
         if self._bucket_is_full():
             self._show_bucket_full_warning()
             return
+        before = clone_tiles(self.model.tiles)
         duplicate = self.model.duplicate_tile(index)
         if duplicate is not None:
+            self._record_bucket_snapshot(before)
             self._refresh_all(selected_index=index + 1)
 
     def _move_tile(self, index: int, offset: int) -> None:
         if index < 0:
             return
+        before = clone_tiles(self.model.tiles)
         new_index = self.model.move_tile(index, offset)
+        self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=new_index)
 
     def _rename_tile(self, index: int) -> None:
@@ -687,8 +738,27 @@ class MainWindow(QMainWindow):
         current_name = self.model.tiles[index].name
         name, accepted = QInputDialog.getText(self, "Rename tile", "Name", text=current_name)
         if accepted and name.strip():
+            before = clone_tiles(self.model.tiles)
             self.model.rename_tile(index, name)
+            self._record_bucket_snapshot(before)
             self._refresh_all(selected_index=index)
+
+    def _record_bucket_change(self, mutation) -> None:
+        before = clone_tiles(self.model.tiles)
+        mutation()
+        self._record_bucket_snapshot(before)
+
+    def _record_bucket_snapshot(self, before) -> None:
+        after = clone_tiles(self.model.tiles)
+        self.command_stack.execute(BucketStateCommand(self.model, before, after))
+
+    def _undo_bucket(self) -> None:
+        if self.command_stack.undo():
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
+
+    def _redo_bucket(self) -> None:
+        if self.command_stack.redo():
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
 
     def _set_viewer_tool(self, tool: str) -> None:
         self.source_viewer.set_tool(tool)

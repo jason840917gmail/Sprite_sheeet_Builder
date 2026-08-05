@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import subprocess
+import os
 from typing import Any
 
 from sprite_sheet_cleaner.app.ai_protocol.messages import decode_message, encode_message
 
 
 class AIWorkerClient:
-    def __init__(self, command: list[str]) -> None:
+    def __init__(self, command: list[str], *, environment: dict[str, str] | None = None) -> None:
         if not command:
             raise ValueError("AI worker command cannot be empty.")
         self.command = list(command)
+        self.environment = dict(environment) if environment is not None else None
         self.process: subprocess.Popen[bytes] | None = None
 
     def start(self) -> None:
@@ -21,6 +23,7 @@ class AIWorkerClient:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=self.environment,
         )
 
     def request(self, message: dict[str, Any]) -> dict[str, Any]:

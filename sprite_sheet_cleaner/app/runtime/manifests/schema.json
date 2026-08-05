@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["runtime_id", "display_name"],
+  "properties": {
+    "runtime_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+    "display_name": {"type": "string", "minLength": 1},
+    "model_url": {"type": "string", "format": "uri"},
+    "model_filename": {"type": "string", "minLength": 1},
+    "model_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "package_requirements": {"type": "array", "items": {"type": "string"}}
+  }
+}
