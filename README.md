@@ -42,14 +42,14 @@ pip install -r sprite_sheet_cleaner\requirements.txt
 
 ## Current Workflow
 
-1. Open a source image.
-2. Set the tile / selection size. Use `Sym` if you want width and height linked.
-3. Set Selection grid to `1 x 1` for one tile at a time, or increase it to select a tile block such as `1 x 2`.
-4. Use the Select tool to place the fixed-size selection box. In Select mode, left-click places the selection, arrow keys nudge it 1 pixel at a time, `Space` adds it to the bucket, and `Esc` clears it.
-5. Use the Grid tool to divide the source image into equal cells. If the image size is uneven, Grid rounds down and leaves leftover right/bottom pixels outside the clickable grid.
-6. In Grid mode, left-click individual cells to add them to the bucket, right-click and hold to drag the fitted grid within the image boundaries, or use the arrow keys to nudge the grid 1 pixel at a time.
-7. Use the Pointer tool to pan around the canvas. `WASD` also pans the view in any tool. Switching to Pointer or Grid clears the current Select box.
-8. The app auto-detects the background color when you open an image. Use `Detect` to re-sample from the current selection border when needed.
-9. Add tiles to the bucket. You can rename, duplicate, reorder, delete, or clear the bucket from the bucket panel.
-10. Adjust Final tilesheet rows and columns if the bucket needs more output slots.
-11. Export the final sprite sheet.
+1. Open a source image or supported video.
+2. For video, choose a frame range and sampling interval, extract thumbnails, and select the frames to keep. Open additional videos with `Open Video...`; each video gets its own tab while all tabs share one bucket and final tilesheet.
+3. In the Video Tool panel, set the frame output size such as `64 x 64`, choose Fit, Stretch, or Fill/Crop, and configure background removal. These settings are applied as frames enter the bucket.
+4. Left-click a frame thumbnail to select it and add it to the bucket; right-click it to deselect it and remove that video's frame from the bucket.
+5. Set `Seed animation frames` (10 by default) and use `Seed Animation` for a quick starting set of chronologically ordered random frames distributed across the video. Change the count when the action needs fewer or more poses.
+6. Video mode uses full frames; the image workflow's Tile/Selection size, Selection grid, and Grid tool do not control video imports.
+7. Use the Pointer tool to pan around the video frame. `WASD` also pans the view.
+8. Drag bucket items to reorder them, or use the bucket controls to rename, duplicate, delete, or clear tiles.
+9. Adjust Final tilesheet rows and columns in the Video Tool panel if the bucket needs more output slots.
+10. Preview the sheet inline or open the larger modal Animation Preview to inspect playback and timing. In video mode it plays only the selected frames from the active video tab, preserving their bucket order.
+11. Optionally export frame metadata JSON for game-engine integration. Multi-video projects save and restore their tabs, sampling settings, selections, and frame sources.

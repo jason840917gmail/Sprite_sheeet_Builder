@@ -379,6 +379,22 @@ class SourceViewer(QGraphicsView):
             height,
         )
 
+    def set_selection_rect(self, rect: tuple[int, int, int, int] | None) -> None:
+        """Restore a pixel-aligned selection after changing the displayed frame."""
+        if rect is None or not self.has_image():
+            self.clear_selection()
+            return
+        x, y, width, height = (int(value) for value in rect)
+        if width <= 0 or height <= 0:
+            self.clear_selection()
+            return
+        image_width, image_height = self._image_size
+        width = min(width, image_width)
+        height = min(height, image_height)
+        x = min(max(x, 0), max(0, image_width - width))
+        y = min(max(y, 0), max(0, image_height - height))
+        self._set_selection_rect(QRectF(x, y, width, height))
+
     def zoom_in(self) -> None:
         self._zoom_by(1.15)
 

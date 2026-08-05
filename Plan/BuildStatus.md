@@ -4,6 +4,29 @@ Updated: 2026-08-05
 
 ## Built
 
+- Added the first video-to-spritesheet implementation slice:
+  - Open Video action for common video formats.
+  - OpenCV-backed video metadata and frame decoding adapter.
+  - Configurable start/end frame, sampling interval, and max-frame extraction.
+  - Asynchronous frame thumbnail browser with cancellation and stale-worker protection.
+  - Multi-select candidate frames and preview the active frame in the existing Source Viewer.
+  - Apply the existing crop/background-removal/normalization pipeline to selected video frames.
+  - Store source frame index/timestamp metadata on bucket tiles.
+  - Larger modal animation preview with playback controls and frame counter.
+  - Video animation preview is scoped to the selected frames in the active video tab, so one bucket can hold multiple animations.
+  - JSON frame metadata export.
+  - Dedicated Video Tool settings panel separate from image/Grid settings.
+  - Video frame output sizing with Fit, Stretch, or Fill/Crop applied as frames enter the bucket.
+  - Seed Animation action with a user-configurable count, defaulting to 10 distributed random frames.
+  - Bucket drag-and-drop reordering for animation cleanup.
+  - Per-frame resize metadata persisted and reapplied during reprocessing.
+  - Left-click frame thumbnails adds that frame to the bucket; right-click deselects and removes it.
+  - Versioned video-aware project data fields with backward-compatible image loading.
+  - Multiple videos can be open at once, with one independent frame-browser tab per video.
+  - A shared bucket and final tilesheet can combine frames from different video tabs.
+  - Each tab keeps its own extraction settings, thumbnail cache, current frame, and selections.
+  - Multi-video project save/load restores video tabs and resolves each tile against its original video source.
+
 - Created Python package structure under `sprite_sheet_cleaner/`.
 - Added core dataclasses:
   - `AppSettings`
@@ -75,7 +98,7 @@ Updated: 2026-08-05
   - adds clicked grid cells to the bucket through the existing crop-processing pipeline
   - prevents duplicate grid-cell adds by selecting the existing bucket item instead
 - Added unit-tested grid geometry helpers for grid calculation, cell lookup, and cell rectangles.
-- Added Selection grid settings:
+- Added Selection grid settings for the image/Grid workflow:
   - defaults to `1 x 1` so the existing one-tile Select workflow remains unchanged
   - expands the Select overlay by tile columns and rows, such as `1 x 2`
   - adds each selected grid cell to the bucket as its own tile
@@ -85,7 +108,7 @@ Updated: 2026-08-05
 ## Verified
 
 - `python -m unittest discover -s sprite_sheet_cleaner\tests`
-  - Passed: 21 tests
+  - Passed: 58 tests; 16 Qt tests skipped because PySide6 is not installed in the current runtime.
 - `python -m compileall -q sprite_sheet_cleaner`
   - Passed
 - `.venv` offscreen Qt layout smoke test
@@ -122,6 +145,9 @@ Updated: 2026-08-05
 ## Pending
 
 - Install runtime dependencies from `sprite_sheet_cleaner/requirements.txt`.
+- Verify video extraction with real MP4/MOV/WebM files after OpenCV is installed.
+- Verify resize modes visually with wide, tall, transparent, and already-square frames.
+- Run the new video and export tests in an environment with Python dependencies available.
 - Launch and manually verify the PySide6 desktop UI.
 - Add visual polish:
   - checkerboard transparency background
@@ -129,8 +155,8 @@ Updated: 2026-08-05
   - richer keyboard shortcuts
   - recent files
 - Improve project save/load:
-  - support relative source-image paths
-  - warn when source images moved
+  - warn when source videos moved
+  - offer a relink flow when a source is unavailable
   - store per-tile settings if future versions need mixed settings
 - Add undo/redo.
 - Add drag-and-drop bucket reordering.

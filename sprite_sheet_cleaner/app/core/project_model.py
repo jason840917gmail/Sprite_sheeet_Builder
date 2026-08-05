@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from PIL import Image
 
-from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop
+from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop, process_crop_with_resize
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
+from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
 from sprite_sheet_cleaner.app.models.tile_item import TileItem
+from sprite_sheet_cleaner.app.core.video_source import FrameRef
 
 
 CropRect = tuple[int, int, int, int]
@@ -52,6 +55,9 @@ def split_selection_grid_rect(
 @dataclass
 class ProjectModel:
     source_image_path: str | None = None
+    source_type: str = "image"
+    video_metadata: dict[str, object] | None = None
+    video_settings: dict[str, object] | None = None
     settings: AppSettings = field(default_factory=AppSettings)
     tiles: list[TileItem] = field(default_factory=list)
 
@@ -76,6 +82,8 @@ class ProjectModel:
             source_size=(crop_rect[2], crop_rect[3]),
             final_size=(self.settings.tile_width, self.settings.tile_height),
             image_rgba=image,
+            source_type="image",
+            source_path=self.source_image_path,
         )
         self.tiles.append(item)
         return item
@@ -107,6 +115,8 @@ class ProjectModel:
                     source_size=(normalized_rect[2], normalized_rect[3]),
                     final_size=(self.settings.tile_width, self.settings.tile_height),
                     image_rgba=image,
+                    source_type="image",
+                    source_path=self.source_image_path,
                 )
             )
         self.tiles.extend(items)
@@ -145,18 +155,115 @@ class ProjectModel:
                     source_size=(crop_rect[2], crop_rect[3]),
                     final_size=(self.settings.tile_width, self.settings.tile_height),
                     image_rgba=process_crop(source_image, crop_rect, self.settings),
+                    source_type=tile.source_type,
+                    source_frame_index=tile.source_frame_index,
+                    source_timestamp_ms=tile.source_timestamp_ms,
+                    source_path=tile.source_path,
                 )
             )
         self.tiles = rebuilt
 
+    def reprocess_video_tiles(
+        self,
+        frame_provider: Callable[[int], Image.Image],
+        source_frame_provider: Callable[[str | None, int], Image.Image] | None = None,
+    ) -> None:
+        rebuilt: list[TileItem] = []
+        for tile in self.tiles:
+            if tile.source_type != "video" or tile.source_frame_index is None:
+                rebuilt.append(tile)
+                continue
+            if source_frame_provider is not None:
+                frame = source_frame_provider(tile.source_path, tile.source_frame_index)
+            else:
+                frame = frame_provider(tile.source_frame_index)
+            crop_rect = clamp_crop_rect(frame, tile.source_rect)
+            resize_settings = None
+            if tile.resize_size is not None and tile.resize_mode is not None:
+                resize_settings = FrameResizeSettings(*tile.resize_size, mode=tile.resize_mode).validated()
+            rebuilt.append(
+                TileItem(
+                    name=tile.name,
+                    source_rect=crop_rect,
+                    source_size=(crop_rect[2], crop_rect[3]),
+                    final_size=(self.settings.tile_width, self.settings.tile_height),
+                    image_rgba=process_crop_with_resize(frame, crop_rect, self.settings, resize_settings),
+                    source_type="video",
+                    source_frame_index=tile.source_frame_index,
+                    source_timestamp_ms=tile.source_timestamp_ms,
+                    source_path=tile.source_path,
+                    resize_size=tile.resize_size,
+                    resize_mode=tile.resize_mode,
+                )
+            )
+        self.tiles = rebuilt
+
+    def add_video_frames(
+        self,
+        frames: list[tuple[FrameRef, Image.Image]],
+        *,
+        crop_rect: CropRect | None = None,
+        source_path: str | None = None,
+        resize_settings_by_frame: dict[int, FrameResizeSettings] | None = None,
+    ) -> list[TileItem]:
+        if not frames:
+            return []
+        existing_indices = {
+            (tile.source_path, tile.source_frame_index)
+            for tile in self.tiles
+            if tile.source_type == "video"
+            and tile.source_frame_index is not None
+        }
+        pending: list[TileItem] = []
+        for ref, frame in sorted(frames, key=lambda pair: pair[0].index):
+            frame_key = (source_path, ref.index)
+            if frame_key in existing_indices:
+                continue
+            rect = crop_rect or (0, 0, frame.width, frame.height)
+            normalized_rect = clamp_crop_rect(frame, rect)
+            resize_settings = (resize_settings_by_frame or {}).get(ref.index)
+            if resize_settings is not None:
+                resize_settings.validated()
+            image = process_crop_with_resize(frame, normalized_rect, self.settings, resize_settings)
+            pending.append(
+                TileItem(
+                    name=f"frame_{ref.index:04d}",
+                    source_rect=normalized_rect,
+                    source_size=(normalized_rect[2], normalized_rect[3]),
+                    final_size=(self.settings.tile_width, self.settings.tile_height),
+                    image_rgba=image,
+                    source_type="video",
+                    source_frame_index=ref.index,
+                    source_timestamp_ms=ref.timestamp_ms,
+                    source_path=source_path,
+                    resize_size=(resize_settings.target_width, resize_settings.target_height)
+                    if resize_settings is not None
+                    else None,
+                    resize_mode=resize_settings.mode if resize_settings is not None else None,
+                )
+            )
+            existing_indices.add(frame_key)
+        self.tiles.extend(pending)
+        return pending
+
     def to_project_data(self) -> dict[str, object]:
         return {
+            "schema_version": 2,
+            "source_type": self.source_type,
             "source_image_path": self.source_image_path,
+            "video_metadata": self.video_metadata,
+            "video_settings": self.video_settings,
             "settings": self.settings.to_dict(),
             "tiles": [
                 {
                     "name": tile.name,
                     "source_rect": list(tile.source_rect),
+                    "source_type": tile.source_type,
+                    "source_frame_index": tile.source_frame_index,
+                    "source_timestamp_ms": tile.source_timestamp_ms,
+                    "source_path": tile.source_path,
+                    "resize_size": list(tile.resize_size) if tile.resize_size is not None else None,
+                    "resize_mode": tile.resize_mode,
                 }
                 for tile in self.tiles
             ],
@@ -164,6 +271,9 @@ class ProjectModel:
 
     def load_project_data(self, data: dict[str, object], source_image: Image.Image) -> None:
         self.source_image_path = data.get("source_image_path") or None
+        self.source_type = str(data.get("source_type") or "image")
+        self.video_metadata = data.get("video_metadata") if isinstance(data.get("video_metadata"), dict) else None
+        self.video_settings = data.get("video_settings") if isinstance(data.get("video_settings"), dict) else None
         settings_data = data.get("settings", {})
         if not isinstance(settings_data, dict):
             raise ValueError("Project settings must be an object.")
@@ -181,4 +291,14 @@ class ProjectModel:
             if not isinstance(source_rect, (list, tuple)) or len(source_rect) != 4:
                 raise ValueError("Each project tile needs a source_rect with four values.")
             name = str(tile_data.get("name") or self.next_tile_name())
-            self.add_tile_from_crop(source_image, tuple(int(value) for value in source_rect), name=name)
+            item = self.add_tile_from_crop(source_image, tuple(int(value) for value in source_rect), name=name)
+            item.source_type = str(tile_data.get("source_type") or "image")
+            frame_index = tile_data.get("source_frame_index")
+            item.source_frame_index = int(frame_index) if frame_index is not None else None
+            timestamp = tile_data.get("source_timestamp_ms")
+            item.source_timestamp_ms = int(timestamp) if timestamp is not None else None
+            item.source_path = str(tile_data.get("source_path")) if tile_data.get("source_path") else None
+            resize_size = tile_data.get("resize_size")
+            if isinstance(resize_size, (list, tuple)) and len(resize_size) == 2:
+                item.resize_size = (int(resize_size[0]), int(resize_size[1]))
+            item.resize_mode = str(tile_data.get("resize_mode")) if tile_data.get("resize_mode") else None
