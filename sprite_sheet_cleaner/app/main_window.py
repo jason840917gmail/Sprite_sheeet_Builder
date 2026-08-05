@@ -25,6 +25,7 @@ from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.jobs.qt_job_controller import JobHandle, QtJobController
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
 from sprite_sheet_cleaner.app.services.source_repository import SourceRepository
+from sprite_sheet_cleaner.app.services.project_service import load_model_project, save_model_project
 from sprite_sheet_cleaner.app.utils.tool_icons import create_grid_icon, create_pointer_icon, create_select_icon
 from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 from sprite_sheet_cleaner.app.widgets.bucket_panel import BucketPanel
@@ -338,15 +339,16 @@ class MainWindow(QMainWindow):
             self,
             "Save project",
             "",
-            "Sprite Sheet Cleaner project (*.ssc.json);;JSON (*.json)",
+            "Sprite Sheet Cleaner project (*.sscproj);;Legacy JSON (*.ssc.json *.json)",
         )
         if not path:
             return
         output_path = Path(path)
-        if output_path.suffix.lower() != ".json":
-            output_path = output_path.with_suffix(".ssc.json")
         try:
-            output_path.write_text(json.dumps(self.model.to_project_data(), indent=2), encoding="utf-8")
+            if output_path.suffix.lower() == ".json":
+                output_path.write_text(json.dumps(self.model.to_project_data(), indent=2), encoding="utf-8")
+            else:
+                output_path = save_model_project(output_path, self.model)
         except Exception as exc:
             QMessageBox.critical(self, "Save project failed", str(exc))
             return
@@ -363,6 +365,27 @@ class MainWindow(QMainWindow):
             return
         project_path = Path(path)
         try:
+            if project_path.suffix.lower() == ".sscproj":
+                source_path_value = None
+                archive_data = load_model_project(project_path, self.model)
+                source_path_value = self.model.source_image_path
+                if not source_path_value:
+                    raise ValueError("Project does not include a source_image_path.")
+                source_path = Path(source_path_value)
+                if not source_path.exists():
+                    raise FileNotFoundError(f"Source image was not found: {source_path}")
+                with Image.open(source_path) as image:
+                    self.source_image = image.convert("RGBA")
+                self.source_repository.open_original(self.source_image, source_path)
+                self.source_background_panel.set_candidate_state(False, "Original source is active")
+                self.settings_panel.set_settings(self.model.settings)
+                self._apply_selection_geometry()
+                self.source_viewer.set_image(pil_to_qimage(self.source_image))
+                self._sync_sheet_to_grid()
+                self._last_selection = None
+                self._refresh_all()
+                self.statusBar().showMessage(f"Loaded project {project_path.name}")
+                return
             data = json.loads(project_path.read_text(encoding="utf-8"))
             source_path_value = data.get("source_image_path")
             if not source_path_value:
