@@ -42,7 +42,12 @@ from sprite_sheet_cleaner.app.services.source_processing_service import SourcePr
 from sprite_sheet_cleaner.app.services.source_repository import SourceRepository
 from sprite_sheet_cleaner.app.services.project_service import load_model_project, save_model_project
 from sprite_sheet_cleaner.app.services.legacy_project_importer import load_legacy_project_into_model
-from sprite_sheet_cleaner.app.utils.tool_icons import create_grid_icon, create_pointer_icon, create_select_icon
+from sprite_sheet_cleaner.app.utils.tool_icons import (
+    create_grid_icon,
+    create_help_icon,
+    create_pointer_icon,
+    create_select_icon,
+)
 from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 from sprite_sheet_cleaner.app.widgets.bucket_panel import BucketPanel
 from sprite_sheet_cleaner.app.widgets.animation_preview_dialog import AnimationPreviewDialog
@@ -52,6 +57,7 @@ from sprite_sheet_cleaner.app.widgets.settings_panel import SettingsPanel
 from sprite_sheet_cleaner.app.widgets.source_background_panel import SourceBackgroundPanel
 from sprite_sheet_cleaner.app.widgets.source_viewer import SourceViewer
 from sprite_sheet_cleaner.app.widgets.model_manager_dialog import ModelManagerDialog, default_runtime_registry
+from sprite_sheet_cleaner.app.widgets.help_dialog import HelpDialog
 from sprite_sheet_cleaner.app.commands.command_stack import CommandStack
 from sprite_sheet_cleaner.app.commands.bucket_commands import BucketStateCommand, clone_tiles
 from sprite_sheet_cleaner.app.widgets.video_settings_panel import VideoSettingsPanel
@@ -175,6 +181,7 @@ class MainWindow(QMainWindow):
         edit_menu = self.menuBar().addMenu("&Edit")
         view_menu = self.menuBar().addMenu("&View")
         tool_menu = self.menuBar().addMenu("&Tools")
+        help_menu = self.menuBar().addMenu("&Help")
         self.model_manager_action = QAction("Optional AI Model Manager...", self)
         tool_menu.addAction(self.model_manager_action)
         self.undo_action = QAction("&Undo", self)
@@ -212,9 +219,16 @@ class MainWindow(QMainWindow):
         self.tool_bar.addAction(self.pointer_action)
         self.tool_bar.addAction(self.select_action)
         self.tool_bar.addAction(self.grid_action)
+        self.help_action = QAction(create_help_icon(), "Help", self)
+        self.help_action.setShortcut(QKeySequence("F1"))
+        self.help_action.setToolTip("Open the indexed in-app help guide.")
+        self.help_action.setStatusTip("Open the indexed in-app help guide.")
+        self.tool_bar.addSeparator()
+        self.tool_bar.addAction(self.help_action)
         tool_menu.addAction(self.pointer_action)
         tool_menu.addAction(self.select_action)
         tool_menu.addAction(self.grid_action)
+        help_menu.addAction(self.help_action)
 
         self.open_action = QAction("&Open Image...", self)
         self.open_action.setShortcut(QKeySequence.Open)
@@ -280,6 +294,7 @@ class MainWindow(QMainWindow):
         self.delete_tile_action.triggered.connect(self._delete_selected_tile)
         self.clear_selection_action.triggered.connect(self._clear_source_selection)
         self.model_manager_action.triggered.connect(self._show_model_manager)
+        self.help_action.triggered.connect(self._show_help)
         self.undo_action.triggered.connect(self._undo_bucket)
         self.redo_action.triggered.connect(self._redo_bucket)
 
@@ -296,6 +311,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.addAllRequested.connect(self._add_all_grid_cells)
         self.settings_panel.detectBackgroundRequested.connect(self._detect_background_color)
         self.source_background_panel.applyRequested.connect(self._apply_source_background)
+        self.source_background_panel.detectRequested.connect(self._detect_background_color)
         self.source_background_panel.activateRequested.connect(self._activate_source_candidate)
         self.source_background_panel.applyToBucketRequested.connect(self._apply_candidate_to_bucket)
         self.source_background_panel.discardRequested.connect(self._discard_source_candidate)
@@ -318,6 +334,12 @@ class MainWindow(QMainWindow):
         dialog = ModelManagerDialog(self.runtime_registry, compute="auto", parent=self)
         dialog.runtimeChanged.connect(self._refresh_optional_engines)
         dialog.exec()
+
+    def _show_help(self) -> None:
+        try:
+            HelpDialog(parent=self).exec()
+        except Exception as exc:
+            QMessageBox.critical(self, "Help unavailable", str(exc))
 
     def _refresh_optional_engines(self) -> None:
         self.source_background_panel.set_engine_available("rembg", False)

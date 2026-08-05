@@ -73,6 +73,8 @@ You can also use the root launcher:
 11. Preview the sheet inline or open the larger modal Animation Preview. In video mode it plays only the selected frames from the active video tab, preserving their bucket order.
 12. Export the sprite sheet PNG, individual tile PNGs, or frame metadata JSON. Saved projects restore multi-video tabs, sampling controls, selected candidates, and video output settings.
 
+Use the **Help** toolbar button, the **Help** menu, or `F1` to browse the indexed Markdown guides in the repository's `help/` folder.
+
 The default workflow does not resize, trim, or pad selected tiles. A fixed `256 x 256` selection exports as a `256 x 256` tile. Background removal can still be enabled when the source sheet uses a solid color background.
 
 The app auto-detects the background color when you open a source image. Use the `Detect` button beside Background color to re-sample the current selection border. If no selection exists, it samples the source image border. This is useful for AI sheets where the purple background is close to, but not exactly, `#FF00FF`.

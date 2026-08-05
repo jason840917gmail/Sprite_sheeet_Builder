@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "documents": [
+    {
+      "id": "getting-started",
+      "title": "Getting Started",
+      "description": "The basic image-to-sprite workflow.",
+      "path": "getting-started.md"
+    },
+    {
+      "id": "right-panel",
+      "title": "Right Panel Guide",
+      "description": "What every image, background, bucket, and preview control does.",
+      "path": "right-panel.md"
+    },
+    {
+      "id": "background-removal",
+      "title": "Background Removal",
+      "description": "Exact Key, Smart Solid, rembg, BEN2, CUDA, and candidate revisions.",
+      "path": "background-removal.md"
+    },
+    {
+      "id": "video-workflow",
+      "title": "Video Workflow",
+      "description": "Extract frames, build animations, and export metadata.",
+      "path": "video-workflow.md"
+    },
+    {
+      "id": "keyboard-shortcuts",
+      "title": "Keyboard Shortcuts",
+      "description": "Fast controls for selection, navigation, editing, and help.",
+      "path": "keyboard-shortcuts.md"
+    }
+  ]
+}

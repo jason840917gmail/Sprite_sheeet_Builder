@@ -16,6 +16,10 @@ def create_grid_icon(size: int = 24) -> QIcon:
     return _paint_icon(size, _draw_grid_icon)
 
 
+def create_help_icon(size: int = 24) -> QIcon:
+    return _paint_icon(size, _draw_help_icon)
+
+
 def _paint_icon(size: int, draw_callback) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
@@ -95,3 +99,12 @@ def _draw_grid_icon(painter: QPainter, rect: QRectF) -> None:
         y = frame.top() + cell_height * step
         painter.drawLine(QPointF(x, frame.top()), QPointF(x, frame.bottom()))
         painter.drawLine(QPointF(frame.left(), y), QPointF(frame.right(), y))
+
+
+def _draw_help_icon(painter: QPainter, rect: QRectF) -> None:
+    frame = QRectF(rect.left() + 4.0, rect.top() + 4.0, rect.width() - 8.0, rect.height() - 8.0)
+    painter.setPen(QPen(QColor(225, 241, 255, 235), 1.5))
+    painter.setBrush(QColor(31, 143, 255, 210))
+    painter.drawEllipse(frame)
+    painter.setPen(QColor(255, 255, 255, 245))
+    painter.drawText(frame, Qt.AlignCenter, "?")

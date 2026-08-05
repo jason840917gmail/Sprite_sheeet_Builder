@@ -27,6 +27,9 @@ Updated: 2026-08-05
   - Each tab keeps its own extraction settings, thumbnail cache, current frame, and selections.
   - Multi-video project save/load restores video tabs and resolves each tile against its original video source.
 
+- Added an indexed Markdown help library in `help/`, available from the Help toolbar button, the Help menu, and `F1`.
+- Added compact Source Background action labels with descriptive hover tooltips; the panel's Detect control now performs source-border detection directly.
+
 - Created Python package structure under `sprite_sheet_cleaner/`.
 - Added core dataclasses:
   - `AppSettings`
@@ -108,7 +111,7 @@ Updated: 2026-08-05
 ## Verified
 
 - `python -m unittest discover -s sprite_sheet_cleaner\tests`
-  - Passed: 116 tests; 19 Qt tests skipped because PySide6 is not installed in the current runtime.
+- Passed: 118 tests; 19 Qt tests skipped because PySide6 is not installed in the current runtime.
 - `python -m compileall -q sprite_sheet_cleaner`
   - Passed
 - `.venv` offscreen Qt layout smoke test
@@ -186,7 +189,7 @@ Updated: 2026-08-05
 
 ## Verification (2026-08-05)
 
-- Bundled Python: `116` unit tests passed, `19` expected Qt tests skipped because
+- Bundled Python: `118` unit tests passed, `19` expected Qt tests skipped because
   the bundled runtime does not include PySide6.
 - `python -m compileall -q sprite_sheet_cleaner`: passed.
 - `git diff --check`: passed.

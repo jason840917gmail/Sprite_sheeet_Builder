@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -19,6 +20,7 @@ from sprite_sheet_cleaner.app.models.source_processing_settings import SourcePro
 
 class SourceBackgroundPanel(QWidget):
     settingsChanged = Signal(object)
+    detectRequested = Signal()
     applyRequested = Signal()
     applyToBucketRequested = Signal()
     activateRequested = Signal()
@@ -37,29 +39,52 @@ class SourceBackgroundPanel(QWidget):
         self.engine.addItem("BEN2 (install model)", "ben2")
         for index in (2, 3):
             self.engine.model().item(index).setEnabled(False)
-        self.engine.setToolTip("Optional AI engines become available after Model Manager installation.")
+        self.engine.setToolTip(
+            "Choose how the source background is removed. Exact Key is for a known flat color; "
+            "Smart Solid follows connected border background; rembg and BEN2 are optional AI engines."
+        )
         self.compute = QComboBox()
         self.compute.addItem("Auto (CUDA, then CPU)", "auto")
         self.compute.addItem("NVIDIA CUDA only", "cuda")
         self.compute.addItem("CPU only", "cpu")
+        self.compute.setToolTip(
+            "Auto tries NVIDIA CUDA first and falls back to CPU. CUDA-only reports configuration problems "
+            "instead of falling back."
+        )
 
         self.color_button = QPushButton()
         self.color_button.setFixedWidth(82)
+        self.color_button.setToolTip("Background color used by color-based removal engines.")
         self.detect_button = QPushButton("Detect")
+        self.detect_button.setToolTip("Sample the current source border and set the background color automatically.")
         self.tolerance = QSpinBox()
         self.tolerance.setRange(0, 255)
         self.tolerance.setValue(30)
+        self.tolerance.setToolTip("Exact Key color distance. Higher values remove a wider range of similar colors.")
         self.transparent_threshold = QSpinBox()
         self.transparent_threshold.setRange(0, 255)
         self.transparent_threshold.setValue(24)
+        self.transparent_threshold.setToolTip("Alpha below this value becomes fully transparent.")
         self.foreground_threshold = QSpinBox()
         self.foreground_threshold.setRange(1, 255)
         self.foreground_threshold.setValue(64)
-        self.apply_button = QPushButton("Apply to Source")
-        self.activate_button = QPushButton("Activate Revision")
-        self.apply_bucket_button = QPushButton("Apply Candidate to Bucket")
-        self.discard_button = QPushButton("Discard Candidate")
+        self.foreground_threshold.setToolTip("Alpha above this value stays solid; the middle range is feathered.")
+        self.apply_button = QPushButton("Process")
+        self.apply_button.setToolTip(
+            "Process Source — create a reviewable candidate. The original source remains unchanged."
+        )
+        self.activate_button = QPushButton("Activate")
+        self.activate_button.setToolTip(
+            "Activate Revision — use the reviewed candidate for future tile extraction. Existing tiles stay unchanged."
+        )
+        self.apply_bucket_button = QPushButton("To Bucket")
+        self.apply_bucket_button.setToolTip(
+            "Apply to Bucket — reprocess existing bucket tiles with this candidate without activating it globally."
+        )
+        self.discard_button = QPushButton("Discard")
+        self.discard_button.setToolTip("Discard Candidate — remove the pending candidate and keep the original active.")
         self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setToolTip("Cancel the running background-removal job.")
         self.activate_button.setEnabled(False)
         self.apply_bucket_button.setEnabled(False)
         self.discard_button.setEnabled(False)
@@ -84,11 +109,21 @@ class SourceBackgroundPanel(QWidget):
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(4)
         actions.addWidget(self.apply_button)
         actions.addWidget(self.activate_button)
         actions.addWidget(self.apply_bucket_button)
         actions.addWidget(self.discard_button)
         actions.addWidget(self.cancel_button)
+        for button in (
+            self.apply_button,
+            self.activate_button,
+            self.apply_bucket_button,
+            self.discard_button,
+            self.cancel_button,
+        ):
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -100,7 +135,7 @@ class SourceBackgroundPanel(QWidget):
         layout.addWidget(self.status_label)
 
         self.color_button.clicked.connect(self._choose_color)
-        self.detect_button.clicked.connect(self._show_detection_hint)
+        self.detect_button.clicked.connect(self.detectRequested.emit)
         self.engine.currentIndexChanged.connect(self._emit_settings_changed)
         self.compute.currentIndexChanged.connect(self._emit_settings_changed)
         self.tolerance.valueChanged.connect(self._emit_settings_changed)
@@ -156,9 +191,6 @@ class SourceBackgroundPanel(QWidget):
         self.foreground_threshold.setEnabled(not running)
         if message:
             self.status_label.setText(message)
-
-    def _show_detection_hint(self) -> None:
-        self.status_label.setText("Use Detect in the source toolbar to sample the current source border.")
 
     def _choose_color(self) -> None:
         current = QColor(*self._background_color)

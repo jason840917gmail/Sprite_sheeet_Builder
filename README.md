@@ -53,3 +53,5 @@ pip install -r sprite_sheet_cleaner\requirements.txt
 9. Adjust Final tilesheet rows and columns in the Video Tool panel if the bucket needs more output slots.
 10. Preview the sheet inline or open the larger modal Animation Preview to inspect playback and timing. In video mode it plays only the selected frames from the active video tab, preserving their bucket order.
 11. Optionally export frame metadata JSON for game-engine integration. Multi-video projects save and restore their tabs, sampling settings, selections, and frame sources.
+
+Use the **Help** toolbar button, **Help** menu, or `F1` to browse the indexed Markdown guides in [`help/`](help/).
