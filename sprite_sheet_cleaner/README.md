@@ -102,4 +102,4 @@ The tool does not automatically detect every tile. Complex backgrounds may not r
 
 ## Roadmap
 
-MVP work focuses on manual crop, bucket, background removal, fixed tile canvas, final sheet preview, and PNG export. Video frame extraction, frame selection, animation preview, and metadata export are now supported. Later work can add richer project management, undo/redo, recent files, multiple buckets, Godot metadata, and installer packaging.
+MVP work focuses on manual crop, bucket, background removal, fixed tile canvas, final sheet preview, and PNG export. Video frame extraction, frame selection, animation preview, metadata export, portable projects, and bucket undo/redo are now supported. Later work can add recent files, multiple buckets, Godot metadata, and installer packaging.

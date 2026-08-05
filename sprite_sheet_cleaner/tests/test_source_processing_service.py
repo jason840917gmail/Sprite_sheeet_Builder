@@ -33,7 +33,11 @@ class SourceProcessingServiceTests(unittest.TestCase):
         service = SourceProcessingService(repository, {"exact_key": engine})
         settings = SourceProcessingSettings(tolerance=1)
 
-        service.create_candidate(settings)
+        candidate = service.create_candidate(settings)
+        self.assertEqual(candidate.settings["compute"], "auto")
+        self.assertEqual(candidate.settings["transparent_threshold"], 24)
+        self.assertEqual(candidate.settings["foreground_threshold"], 64)
+        self.assertEqual(candidate.settings["edge_bleed"], 1)
         with self.assertRaises(ValueError):
             service.extract_tile((0, 0, 4, 4), AppSettings())
         repository.activate_candidate()

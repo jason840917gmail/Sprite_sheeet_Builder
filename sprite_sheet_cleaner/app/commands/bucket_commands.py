@@ -15,6 +15,12 @@ def clone_tiles(tiles: list[TileItem]) -> list[TileItem]:
             image_rgba=tile.image_rgba.copy(),
             tile_id=tile.tile_id,
             source_revision_id=tile.source_revision_id,
+            source_type=tile.source_type,
+            source_frame_index=tile.source_frame_index,
+            source_timestamp_ms=tile.source_timestamp_ms,
+            source_path=tile.source_path,
+            resize_size=tile.resize_size,
+            resize_mode=tile.resize_mode,
         )
         for tile in tiles
     ]

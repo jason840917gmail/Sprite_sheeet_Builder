@@ -108,7 +108,7 @@ Updated: 2026-08-05
 ## Verified
 
 - `python -m unittest discover -s sprite_sheet_cleaner\tests`
-  - Passed: 58 tests; 16 Qt tests skipped because PySide6 is not installed in the current runtime.
+  - Passed: 116 tests; 19 Qt tests skipped because PySide6 is not installed in the current runtime.
 - `python -m compileall -q sprite_sheet_cleaner`
   - Passed
 - `.venv` offscreen Qt layout smoke test
@@ -158,13 +158,10 @@ Updated: 2026-08-05
   - warn when source videos moved
   - offer a relink flow when a source is unavailable
   - store per-tile settings if future versions need mixed settings
-- Add undo/redo.
-- Add drag-and-drop bucket reordering.
 - Add snap-to-size selection.
 - Add richer grid interactions:
   - shift-click or drag to add multiple grid cells
   - auto-fill bucket from all grid cells
-- Add JSON metadata or Godot notes export.
 - Package with PyInstaller after UI verification.
 
 ## Source-background architecture implementation
@@ -189,7 +186,7 @@ Updated: 2026-08-05
 
 ## Verification (2026-08-05)
 
-- Bundled Python: `93` unit tests passed, `15` expected Qt tests skipped because
+- Bundled Python: `116` unit tests passed, `19` expected Qt tests skipped because
   the bundled runtime does not include PySide6.
 - `python -m compileall -q sprite_sheet_cleaner`: passed.
 - `git diff --check`: passed.

@@ -4,7 +4,7 @@ import unittest
 
 from PIL import Image
 
-from sprite_sheet_cleaner.app.commands.bucket_commands import BucketStateCommand
+from sprite_sheet_cleaner.app.commands.bucket_commands import BucketStateCommand, clone_tiles
 from sprite_sheet_cleaner.app.commands.command_stack import CommandStack
 from sprite_sheet_cleaner.app.core.project_model import ProjectModel
 from sprite_sheet_cleaner.app.models.tile_item import TileItem
@@ -39,6 +39,30 @@ class CommandStackTests(unittest.TestCase):
         stack.execute(second)
 
         self.assertFalse(stack.can_redo)
+
+    def test_bucket_snapshots_preserve_video_metadata(self) -> None:
+        tile = TileItem(
+            "frame",
+            (0, 0, 1, 1),
+            (1, 1),
+            (1, 1),
+            Image.new("RGBA", (1, 1), "white"),
+            source_type="video",
+            source_frame_index=12,
+            source_timestamp_ms=400,
+            source_path="clip.mp4",
+            resize_size=(8, 8),
+            resize_mode="fit",
+        )
+
+        copied = clone_tiles([tile])[0]
+
+        self.assertEqual(copied.source_type, "video")
+        self.assertEqual(copied.source_frame_index, 12)
+        self.assertEqual(copied.source_timestamp_ms, 400)
+        self.assertEqual(copied.source_path, "clip.mp4")
+        self.assertEqual(copied.resize_size, (8, 8))
+        self.assertEqual(copied.resize_mode, "fit")
 
 
 if __name__ == "__main__":

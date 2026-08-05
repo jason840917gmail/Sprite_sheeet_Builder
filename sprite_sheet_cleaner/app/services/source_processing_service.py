@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 from PIL import Image
 
 from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop
@@ -30,7 +31,7 @@ class SourceProcessingService:
         source = self.repository.original_image()
         result = engine.remove(source, settings, progress=progress, cancelled=cancelled)
         processed = apply_matte(source, result)
-        settings_data = dict(getattr(settings, "__dict__", {}))
+        settings_data = asdict(settings) if is_dataclass(settings) else dict(getattr(settings, "__dict__", {}))
         if not settings_data:
             for field_name in ("engine", "remove_background", "background_color", "tolerance", "edge_bleed"):
                 if hasattr(settings, field_name):

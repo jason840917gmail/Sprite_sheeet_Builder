@@ -131,6 +131,7 @@ class ProjectModelTests(unittest.TestCase):
             settings=AppSettings(tile_width=2, tile_height=2, remove_background=False),
         )
         model.add_video_frames([(FrameRef(4, 133), source)], source_path="demo.mp4")
+        tile_id = model.tiles[0].tile_id
         data = model.to_project_data()
 
         restored = ProjectModel()
@@ -139,6 +140,7 @@ class ProjectModelTests(unittest.TestCase):
         self.assertEqual(restored.source_type, "video")
         self.assertEqual(restored.video_metadata, {"fps": 30.0})
         self.assertEqual(restored.video_settings, {"sample_every": 2})
+        self.assertEqual(restored.tiles[0].tile_id, tile_id)
         self.assertEqual(restored.tiles[0].source_frame_index, 4)
         self.assertEqual(restored.tiles[0].source_timestamp_ms, 133)
 
@@ -176,6 +178,18 @@ class ProjectModelTests(unittest.TestCase):
 
         self.assertEqual(model.tiles[0].image_rgba.getpixel((0, 0))[:3], (255, 0, 0))
         self.assertEqual(model.tiles[1].image_rgba.getpixel((0, 0))[:3], (0, 0, 255))
+
+    def test_reprocessing_preserves_stable_tile_and_revision_ids(self) -> None:
+        source = Image.new("RGBA", (2, 2), (40, 50, 60, 255))
+        model = ProjectModel(settings=AppSettings(tile_width=2, tile_height=2, remove_background=False))
+        tile = model.add_tile_from_crop(source, (0, 0, 2, 2))
+        tile.source_revision_id = "revision-1"
+        tile_id = tile.tile_id
+
+        model.reprocess_tiles(source)
+
+        self.assertEqual(model.tiles[0].tile_id, tile_id)
+        self.assertEqual(model.tiles[0].source_revision_id, "revision-1")
 
 
 if __name__ == "__main__":

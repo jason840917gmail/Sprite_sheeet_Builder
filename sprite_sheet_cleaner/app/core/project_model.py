@@ -155,6 +155,8 @@ class ProjectModel:
                     source_size=(crop_rect[2], crop_rect[3]),
                     final_size=(self.settings.tile_width, self.settings.tile_height),
                     image_rgba=process_crop(source_image, crop_rect, self.settings),
+                    tile_id=tile.tile_id,
+                    source_revision_id=tile.source_revision_id,
                     source_type=tile.source_type,
                     source_frame_index=tile.source_frame_index,
                     source_timestamp_ms=tile.source_timestamp_ms,
@@ -188,6 +190,8 @@ class ProjectModel:
                     source_size=(crop_rect[2], crop_rect[3]),
                     final_size=(self.settings.tile_width, self.settings.tile_height),
                     image_rgba=process_crop_with_resize(frame, crop_rect, self.settings, resize_settings),
+                    tile_id=tile.tile_id,
+                    source_revision_id=tile.source_revision_id,
                     source_type="video",
                     source_frame_index=tile.source_frame_index,
                     source_timestamp_ms=tile.source_timestamp_ms,
@@ -256,8 +260,10 @@ class ProjectModel:
             "settings": self.settings.to_dict(),
             "tiles": [
                 {
+                    "tile_id": tile.tile_id,
                     "name": tile.name,
                     "source_rect": list(tile.source_rect),
+                    "source_revision_id": tile.source_revision_id,
                     "source_type": tile.source_type,
                     "source_frame_index": tile.source_frame_index,
                     "source_timestamp_ms": tile.source_timestamp_ms,
@@ -292,6 +298,10 @@ class ProjectModel:
                 raise ValueError("Each project tile needs a source_rect with four values.")
             name = str(tile_data.get("name") or self.next_tile_name())
             item = self.add_tile_from_crop(source_image, tuple(int(value) for value in source_rect), name=name)
+            if tile_data.get("tile_id"):
+                item.tile_id = str(tile_data["tile_id"])
+            if tile_data.get("source_revision_id"):
+                item.source_revision_id = str(tile_data["source_revision_id"])
             item.source_type = str(tile_data.get("source_type") or "image")
             frame_index = tile_data.get("source_frame_index")
             item.source_frame_index = int(frame_index) if frame_index is not None else None

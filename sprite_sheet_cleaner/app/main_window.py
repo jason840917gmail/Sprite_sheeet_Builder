@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         self._last_selection: tuple[int, int, int, int] | None = None
         self._last_zoom = 1.0
         self._video_frame_splitter_initialized = False
+        self._bucket_preview_active = False
 
         self.source_viewer = SourceViewer()
         self.source_background_panel = SourceBackgroundPanel()
@@ -309,6 +310,8 @@ class MainWindow(QMainWindow):
         self.bucket_panel.moveUpRequested.connect(lambda index: self._move_tile(index, -1))
         self.bucket_panel.moveDownRequested.connect(lambda index: self._move_tile(index, 1))
         self.bucket_panel.renameRequested.connect(self._rename_tile)
+        self.bucket_panel.reorderRequested.connect(self._reorder_tiles)
+        self.bucket_panel.tileClicked.connect(self._preview_bucket_tile)
         self._refresh_optional_engines()
 
     def _show_model_manager(self) -> None:
@@ -339,8 +342,6 @@ class MainWindow(QMainWindow):
             engines[provider_id] = engine
             self.source_background_panel.set_engine_available(provider_id, True)
         self.source_processing_service.engines = engines
-        self.bucket_panel.reorderRequested.connect(self._reorder_tiles)
-        self.bucket_panel.tileClicked.connect(self._preview_bucket_tile)
 
     def _open_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -402,17 +403,20 @@ class MainWindow(QMainWindow):
 
     def _set_image_panel_mode(self) -> None:
         self.right_panel_stack.setCurrentWidget(self.settings_panel)
+        self.source_background_panel.setEnabled(True)
         self.select_action.setEnabled(True)
         self.grid_action.setEnabled(True)
 
     def _set_video_panel_mode(self, document: VideoDocument) -> None:
         self.right_panel_stack.setCurrentWidget(self.video_settings_panel)
+        self.source_background_panel.setEnabled(False)
         self.video_settings_panel.set_settings(document.settings)
         self.select_action.setEnabled(False)
         self.grid_action.setEnabled(False)
         self._set_viewer_tool("pointer")
 
     def _activate_video_document(self, document: VideoDocument, *, show_frame: bool = True) -> None:
+        self._bucket_preview_active = False
         self.frame_browser = document.browser
         self.source_type = "video"
         self.video_source_path = document.path
@@ -476,6 +480,7 @@ class MainWindow(QMainWindow):
             self._video_tab_changed(self.video_tabs.currentIndex())
             return
         self.frame_browser = None
+        self._bucket_preview_active = False
         self.source_type = "image"
         self.video_source_path = None
         self.video_metadata = None
@@ -508,6 +513,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open image failed", str(exc))
             return
 
+        self._bucket_preview_active = False
+        self._clear_video_documents()
         self.source_type = "image"
         self.video_source_path = None
         self.video_metadata = None
@@ -529,6 +536,7 @@ class MainWindow(QMainWindow):
         self.source_background_panel.set_candidate_state(False, "Original source is active")
         if clear_tiles:
             self.model.clear_tiles()
+            self.command_stack.clear()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
         self._sync_sheet_to_grid()
         self._last_selection = None
@@ -543,6 +551,10 @@ class MainWindow(QMainWindow):
         )
 
     def _apply_source_background(self) -> None:
+        if self.source_type != "image":
+            QMessageBox.warning(self, "Apply background", "Source background processing is available for images only.")
+            return
+        self._restore_source_after_bucket_preview()
         if self.source_image is None:
             QMessageBox.warning(self, "Apply background", "Open a source image first.")
             return
@@ -661,6 +673,7 @@ class MainWindow(QMainWindow):
         self._connect_video_document(document)
         if clear_tiles:
             self.model.clear_tiles()
+            self.command_stack.clear()
 
         self.video_documents.append(document)
         tab_index = self.video_tabs.addTab(document.browser, path.name)
@@ -828,30 +841,40 @@ class MainWindow(QMainWindow):
             self,
             "Load project",
             "",
-            "Sprite Sheet Cleaner project (*.ssc.json *.json);;JSON (*.json);;All files (*.*)",
+            "Sprite Sheet Cleaner project (*.sscproj *.ssc.json *.json);;JSON (*.json);;All files (*.*)",
         )
         if not path:
             return
         project_path = Path(path)
         try:
             if project_path.suffix.lower() == ".sscproj":
-                source_path_value = None
-                archive_data = load_model_project(project_path, self.model)
-                source_path_value = self.model.source_image_path
+                loaded_model = ProjectModel()
+                load_model_project(project_path, loaded_model)
+                source_path_value = loaded_model.source_image_path
                 if not source_path_value:
                     raise ValueError("Project does not include a source_image_path.")
                 source_path = Path(source_path_value)
+                if not source_path.is_absolute():
+                    source_path = project_path.parent / source_path
+                source_path = source_path.resolve()
                 if not source_path.exists():
                     raise FileNotFoundError(f"Source image was not found: {source_path}")
                 with Image.open(source_path) as image:
                     self.source_image = image.convert("RGBA")
+                self.model = loaded_model
+                self.model.source_image_path = str(source_path)
+                self._image_settings = self.model.settings
+                self._clear_video_documents()
+                self.source_type = "image"
                 self.source_repository.open_original(self.source_image, source_path)
                 self.source_background_panel.set_candidate_state(False, "Original source is active")
                 self.settings_panel.set_settings(self.model.settings)
+                self._set_image_panel_mode()
                 self._apply_selection_geometry()
                 self.source_viewer.set_image(pil_to_qimage(self.source_image))
                 self._sync_sheet_to_grid()
                 self._last_selection = None
+                self.command_stack.clear()
                 self._refresh_all()
                 self.statusBar().showMessage(f"Loaded project {project_path.name}")
                 return
@@ -988,6 +1011,8 @@ class MainWindow(QMainWindow):
                 with Image.open(source_path) as image:
                     self.source_image = image.convert("RGBA")
                 self._clear_video_documents()
+                self.source_repository.open_original(self.source_image, source_path)
+                self.source_background_panel.set_candidate_state(False, "Original source is active")
                 self.source_type = "image"
                 self.video_source_path = None
                 self.video_metadata = None
@@ -1027,10 +1052,12 @@ class MainWindow(QMainWindow):
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
         self._sync_sheet_to_grid()
         self._last_selection = None
+        self.command_stack.clear()
         self._refresh_all()
         self.statusBar().showMessage(f"Loaded project {project_path.name}")
 
     def _settings_changed(self, settings: AppSettings) -> None:
+        self._restore_source_after_bucket_preview()
         if self.source_type == "video":
             return
         if self.source_repository.document.active_revision is not None:
@@ -1078,6 +1105,7 @@ class MainWindow(QMainWindow):
         document = self._active_video_document()
         if document is None:
             return
+        before = clone_tiles(self.model.tiles)
         for source_document in self.video_documents:
             resize_settings = FrameResizeSettings(
                 source_document.settings.frame_width,
@@ -1102,8 +1130,11 @@ class MainWindow(QMainWindow):
                 self._read_video_frame_for_source,
             )
         except Exception as exc:
+            self.model.tiles = before
             QMessageBox.critical(self, "Apply video settings failed", str(exc))
             return
+        if before:
+            self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=self.bucket_panel.current_index())
         self.statusBar().showMessage("Applied video output settings to the existing video tiles.")
 
@@ -1135,6 +1166,7 @@ class MainWindow(QMainWindow):
         return parsed
 
     def _add_selection_to_bucket(self) -> None:
+        self._restore_source_after_bucket_preview()
         if self.source_type == "video":
             self._add_selected_video_frames()
             return
@@ -1159,6 +1191,7 @@ class MainWindow(QMainWindow):
             self._show_bucket_full_warning()
             return
 
+        before = clone_tiles(self.model.tiles)
         rect = self.source_viewer.selection_rect()
         if rect is None:
             QMessageBox.warning(self, "Add selection", "Use the Select tool to place a tile box first.")
@@ -1186,6 +1219,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Add selection failed", str(exc))
             return
 
+        self._tag_image_tiles_with_active_revision(added_tiles)
+        self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=len(self.model.tiles) - 1)
         if len(added_tiles) == 1:
             self.statusBar().showMessage(f"Added tile {added_tiles[0].name}")
@@ -1254,6 +1289,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        before = clone_tiles(self.model.tiles)
         try:
             self.model.settings = self._video_app_settings(document)
             resize_settings = FrameResizeSettings(
@@ -1280,6 +1316,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Add video frames failed", str(exc))
             return
 
+        self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=len(self.model.tiles) - 1)
         self.statusBar().showMessage(f"Added {len(added_tiles)} video frame(s) from {description}.")
 
@@ -1304,8 +1341,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Deselected frame {ref.index}; it was not in the bucket.")
             return
 
+        before = clone_tiles(self.model.tiles)
         for index in reversed(matching_indexes):
             self.model.remove_tile(index)
+        self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=min(matching_indexes[0], len(self.model.tiles) - 1))
         self.statusBar().showMessage(f"Removed frame {ref.index} from the bucket.")
 
@@ -1327,6 +1366,7 @@ class MainWindow(QMainWindow):
         *,
         clear_selection_on_success: bool = False,
     ) -> None:
+        self._restore_source_after_bucket_preview()
         if self.source_image is None:
             QMessageBox.warning(self, "Add grid tiles", "Open a source image first.")
             return
@@ -1357,17 +1397,21 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            before = clone_tiles(self.model.tiles)
             added_tiles = self.model.add_tiles_from_rects(self.source_image, new_rects)
         except Exception as exc:
             QMessageBox.critical(self, "Add grid tiles failed", str(exc))
             return
 
+        self._tag_image_tiles_with_active_revision(added_tiles)
+        self._record_bucket_snapshot(before)
         if clear_selection_on_success:
             self.source_viewer.clear_selection()
         self._refresh_all(selected_index=len(self.model.tiles) - 1)
         self.statusBar().showMessage(f"Added {len(added_tiles)} tiles from {description}.")
 
     def _add_grid_cell_to_bucket(self, rect: tuple[int, int, int, int]) -> None:
+        self._restore_source_after_bucket_preview()
         if self.source_image is None:
             QMessageBox.warning(self, "Add grid tile", "Open a source image first.")
             return
@@ -1382,12 +1426,15 @@ class MainWindow(QMainWindow):
             self._show_bucket_full_warning()
             return
 
+        before = clone_tiles(self.model.tiles)
         try:
-            self.model.add_tile_from_crop(self.source_image, rect)
+            added_tile = self.model.add_tile_from_crop(self.source_image, rect)
         except Exception as exc:
             QMessageBox.critical(self, "Add grid tile failed", str(exc))
             return
 
+        self._tag_image_tiles_with_active_revision([added_tile])
+        self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=len(self.model.tiles) - 1)
         cell = self.source_viewer.grid_cell_for_rect(rect)
         if cell is None:
@@ -1395,6 +1442,13 @@ class MainWindow(QMainWindow):
             return
         column, row = cell
         self.statusBar().showMessage(f"Added grid tile row {row + 1}, column {column + 1}")
+
+    def _tag_image_tiles_with_active_revision(self, tiles: list) -> None:
+        revision = self.source_repository.document.active_revision
+        if revision is None:
+            return
+        for tile in tiles:
+            tile.source_revision_id = revision.revision_id
 
     def _detect_background_color(self) -> None:
         if self.source_image is None:
@@ -1411,6 +1465,7 @@ class MainWindow(QMainWindow):
         *,
         show_error_dialog: bool = True,
     ) -> tuple[int, int, int] | None:
+        self._restore_source_after_bucket_preview()
         if self.source_image is None:
             return None
 
@@ -1565,10 +1620,19 @@ class MainWindow(QMainWindow):
         if not 0 <= index < len(self.model.tiles):
             return
         tile = self.model.tiles[index]
-        self.source_image = tile.image_rgba.copy()
-        self._current_frame_ref = None
-        self.source_viewer.set_image(pil_to_qimage(self.source_image))
+        if self.source_type != "image" or self.source_image is None:
+            return
+        self._bucket_preview_active = True
+        self.source_viewer.set_image(pil_to_qimage(tile.image_rgba))
         self.statusBar().showMessage(f"Previewing bucket tile {index + 1}: {tile.name}")
+
+    def _restore_source_after_bucket_preview(self) -> None:
+        if not self._bucket_preview_active:
+            return
+        self._bucket_preview_active = False
+        if self.source_image is not None:
+            self.source_viewer.set_image(pil_to_qimage(self.source_image))
+            self._apply_selection_geometry()
 
     def _clear_source_selection(self) -> None:
         self.source_viewer.clear_selection()
@@ -1617,7 +1681,8 @@ class MainWindow(QMainWindow):
             return
         before = clone_tiles(self.model.tiles)
         new_index = self.model.move_tile(index, offset)
-        self._record_bucket_snapshot(before)
+        if [tile.tile_id for tile in before] != [tile.tile_id for tile in self.model.tiles]:
+            self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=new_index)
 
     def _reorder_tiles(self, order: object) -> None:
@@ -1631,7 +1696,10 @@ class MainWindow(QMainWindow):
             return
         if sorted(indices) != list(range(len(self.model.tiles))):
             return
+        before = clone_tiles(self.model.tiles)
         self.model.tiles = [self.model.tiles[index] for index in indices]
+        if [tile.tile_id for tile in before] != [tile.tile_id for tile in self.model.tiles]:
+            self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=self.bucket_panel.current_index())
         self.statusBar().showMessage("Reordered bucket tiles.")
 
@@ -1664,6 +1732,7 @@ class MainWindow(QMainWindow):
             self._refresh_all(selected_index=self.bucket_panel.current_index())
 
     def _set_viewer_tool(self, tool: str) -> None:
+        self._restore_source_after_bucket_preview()
         self.source_viewer.set_tool(tool)
         self.source_viewer.setFocus(Qt.ShortcutFocusReason)
         if tool == "pointer":
