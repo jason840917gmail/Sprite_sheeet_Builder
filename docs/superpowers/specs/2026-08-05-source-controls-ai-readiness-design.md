@@ -84,7 +84,9 @@ Installation is deliberately non-cancellable because the current download, virtu
 - each operation has a bounded timeout so this policy cannot trap the user indefinitely: network connect/read timeout, environment-creation timeout, package-install timeout, and health-check timeout;
 - timeouts become ordinary failed-stage results and restore Close/Retry controls.
 
-The model download remains atomic and removes its temporary file on failure. Environment creation/package installation uses a managed staging directory and promotes it to the final runtime directory only after packages install successfully. A failed staging directory is removed only after ownership/path validation. If the model succeeded but the environment failed, the stable state is accurately reported as `Model only`.
+The model download and environment/package installation both use per-attempt managed staging directories. The model checksum and runtime ownership are verified in staging before promotion. A failed staging directory is removed only after ownership/path validation. If a new model succeeds but the environment fails, the stable state is accurately reported as `Model only` only when that model was safely promoted for a previously absent runtime; a failed repair never replaces the prior working model/runtime.
+
+Timeout enforcement lives inside the underlying operation, not only around the `QRunnable`. A network timeout closes and joins the response/read operation before staging cleanup. Environment and package commands run as owned subprocess groups; on timeout the app terminates the full descendant process tree, waits for it to exit, validates/cleans staging, and only then emits the failed-stage result. Retry and Close stay disabled until the task confirms that no network operation, subprocess, or descendant can continue writing.
 
 ## Health-check contract
 
@@ -135,7 +137,7 @@ One `OptionalEngineCoordinator` owned by `MainWindow` is the sole owner of readi
 
 After installation the coordinator verifies immediately. On later application launches, installed runtimes are checked asynchronously; the source panel shows `Checking…` until each result arrives. A verified engine is then registered with `SourceProcessingService` and enabled in the engine selector.
 
-Health-check workers may exit after verification. The inference worker remains lazy and starts when the user runs the engine, avoiding permanent RAM/VRAM use. In this design, `Ready` means verified and callable—not continuously consuming resources.
+Health-check workers must exit after verification. The inference worker remains lazy and starts when the user runs the engine, avoiding permanent RAM/VRAM use. In this design, `Ready` means verified and callable—not continuously consuming resources.
 
 ## Compute preference
 
@@ -182,6 +184,10 @@ Provider IDs remain stable (`rembg`, `ben2`) while runtime IDs remain manifest-s
 
 `MainWindow` also owns inference-engine replacement. Replacing, disabling, or repairing a registered engine closes the old `IsolatedAIWorkerEngine` so its child process cannot leak. If a source-processing job is active, the current engine remains owned by that job and the new readiness result is queued; replacement and old-engine disposal occur only after the job completes, fails, or is cancelled. Application shutdown stops accepting probe results, terminates all health workers, refuses to close while a model installation is active, lets the existing source job follow its current cancellation lifecycle, and closes every registered optional inference engine.
 
+Installation/repair promotion obeys the same active-job boundary. A staged model or runtime for the engine serving the current source job is marked `Update ready—waiting for current job`; it cannot replace final files while that job or its inference worker may read them. After the job settles, `MainWindow` closes the old engine, the coordinator atomically promotes the verified staging pair, and only then registers the replacement. For an existing managed runtime, promotion uses an ownership-validated backup/swap/restore transaction so failure preserves the previous working pair. Recovery markers make an interrupted swap detectable on the next launch.
+
+Shutdown ordering is strict: block shutdown while installation/promotion is active; otherwise stop accepting new work, request cancellation of an active source job, wait for its terminal signal, close its and all other inference engines, terminate and join all health workers, and only then allow the window to close. No engine is closed while a job can still call it.
+
 ## Error handling
 
 - Closing the manager or application during an active install is blocked until the bounded task finishes or fails; it must not make the install look successful.
@@ -192,6 +198,8 @@ Provider IDs remain stable (`rembg`, `ben2`) while runtime IDs remain manifest-s
 - Selecting an engine whose readiness was lost disables Run and returns it to `Checking…` or `Repair required`.
 - All status text is meaningful without relying on color alone.
 - Stale health results caused by compute changes, repairs, or shutdown are discarded without mutating engine availability.
+- A staged repair cannot promote over files used by an active source job; failed or interrupted promotion restores the prior verified runtime.
+- No timeout result enables Retry/Close until its network operation or complete subprocess tree has stopped and staging cleanup has finished.
 
 ## Verification
 
@@ -212,6 +220,9 @@ Automated coverage should include:
 - dialog and application closing are blocked during download, environment creation, package installation, and verification, then restored after success/failure;
 - every health-worker success, failure, timeout, and stale result closes the health process;
 - replacing or repairing a running engine defers replacement until the active source job settles, then closes the old engine;
+- model/runtime staging rejects unowned paths, removes failed attempts, promotes successful first installs, and preserves then safely replaces an existing managed pair;
+- download, environment, package, and health timeouts leave no live operation or descendant capable of late writes before Retry/Close is enabled;
+- an active source job prevents staging promotion, and shutdown waits for the job before closing its engine;
 - a ready engine with no source gives open-source guidance;
 - a ready engine with a source runs only after explicit user action and creates a candidate;
 - restart is not requested after ordinary successful hot registration;
