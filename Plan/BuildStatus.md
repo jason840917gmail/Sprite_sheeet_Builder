@@ -1,6 +1,6 @@
 # Sprite Sheet Cleaner Build Status
 
-Updated: 2026-07-02
+Updated: 2026-08-05
 
 ## Built
 
@@ -140,3 +140,37 @@ Updated: 2026-07-02
   - auto-fill bucket from all grid cells
 - Add JSON metadata or Godot notes export.
 - Package with PyInstaller after UI verification.
+
+## Source-background architecture implementation
+
+- Corrected repeated-alpha loss during tile and sheet placement.
+- Added premultiplied-alpha scaling and hidden-RGB edge bleed for game-safe
+  straight-alpha PNG output.
+- Added immutable original sources, candidate/active revisions, one-pass
+  Exact Key and Smart Solid engines, cancellable Qt jobs, and explicit
+  activation/discard workflow.
+- Added stable tile snapshots, portable `.sscproj` archives, archive limits,
+  atomic saves, legacy JSON import, and session undo/redo for bucket updates.
+- Added verified optional runtime manifests and a Model Manager for rembg/U2Net
+  and BEN2 Base ONNX. Weights live in user data and are verified by SHA-256;
+  the repository contains no model files.
+- Added an isolated JSON-line AI worker, ONNX provider discovery, NVIDIA
+  capability probing, CUDA warm-up, and visible Auto CPU fallback.
+- Added atomic export validation, cache indexing/protected entries, sanitized
+  diagnostics, and stable error categories.
+
+## Verification (2026-08-05)
+
+- Bundled Python: `93` unit tests passed, `15` expected Qt tests skipped because
+  the bundled runtime does not include PySide6.
+- `python -m compileall -q sprite_sheet_cleaner`: passed.
+- `git diff --check`: passed.
+
+## Remaining release gates
+
+- Run the Qt suite in a supported environment with PySide6 installed.
+- On an NVIDIA machine, install both optional runtimes through Model Manager,
+  verify the real provider/session warm-up, and measure RAM/VRAM and quality on
+  the project corpus.
+- Run the offline inference, cancellation, OOM fallback, legacy migration, and
+  large-source benchmark gates before packaging.

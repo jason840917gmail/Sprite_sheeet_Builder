@@ -12,6 +12,31 @@ pip install -r sprite_sheet_cleaner\requirements.txt
 
 The core application supports Python 3.11 through 3.14. Optional background-removal runtimes and model weights are installed separately through the in-app Model Manager and are never stored in this repository.
 
+## Optional AI background removal
+
+The source-background panel processes the original image once and keeps the
+candidate revision separate until you explicitly activate it. Tile extraction
+then crops the active source; it does not run an AI model per tile.
+
+Open **Tools > Optional AI Model Manager** to download a verified model and,
+optionally, its isolated Python runtime:
+
+- **rembg + U2Net**: approximately 176 MiB model download, 320x320 input.
+- **BEN2 Base (ONNX)**: approximately 223 MB model download, fixed 1024x1024
+  input and substantially higher inference memory use.
+
+Models are stored under the platform user-data directory
+(`%LOCALAPPDATA%/SpriteSheetCleaner` on Windows). They are checksum-verified,
+never downloaded during inference, and never added to Git. The worker probes
+ONNX Runtime, validates CUDA with a warm-up inference, and in Auto mode retries
+with CPU when CUDA is unavailable, its DLLs fail to load, or the session runs
+out of memory. The panel reports the backend actually used.
+
+For sprite sheets, start with Smart Solid or Exact Key. Use rembg/BEN2 when the
+background is not a reliable solid color, and review the candidate before
+activation. AI runtimes require network access only for the explicit install;
+installed models run offline.
+
 ## Run
 
 From the workspace root:
