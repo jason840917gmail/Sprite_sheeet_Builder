@@ -144,22 +144,36 @@ class CloneSamplingAndPanelTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_first_clone_click_samples_color_without_creating_undo(self) -> None:
+    def test_shift_sampling_replaces_color_and_click_paints_exact_sample(self) -> None:
         window = MainWindow()
         try:
             source = Image.new("RGBA", (4, 4), (20, 30, 40, 255))
             source.putpixel((1, 1), (12, 34, 56, 255))
+            source.putpixel((2, 2), (90, 80, 70, 255))
             window.source_image = source
             window.source_viewer.set_image(pil_to_qimage(source))
             window._set_viewer_tool("retouch")
             window.retouch_panel.mode.setCurrentIndex(2)
+            window.retouch_panel.brush_size.setValue(1)
 
-            window._retouch_pressed((1, 1))
+            before_sample = window._retouch_image().copy()
+            window._retouch_pressed((3, 3))
+            window._retouch_released()
+            self.assertEqual(window._retouch_image().tobytes(), before_sample.tobytes())
+            self.assertIsNone(window._retouch_clone_color)
+
+            window._retouch_sample_requested((1, 1))
+            self.assertEqual(window.retouch_panel.color(), (12, 34, 56))
+            self.assertEqual(window._retouch_clone_color, (12, 34, 56))
+
+            window._retouch_sample_requested((2, 2))
+            self.assertEqual(window.retouch_panel.color(), (90, 80, 70))
+            self.assertEqual(window._retouch_clone_color, (90, 80, 70))
+
+            window._retouch_pressed((3, 3))
             window._retouch_released()
 
-            self.assertEqual(window.retouch_panel.color(), (12, 34, 56))
-            self.assertEqual(window._retouch_clone_origin, (1, 1))
-            self.assertFalse(window.command_stack.can_undo)
+            self.assertEqual(window._retouch_work_image.getpixel((3, 3))[:3], (90, 80, 70))
 
             window._set_viewer_tool("select")
             self.assertIs(window.right_panel_stack.currentWidget(), window.settings_panel)

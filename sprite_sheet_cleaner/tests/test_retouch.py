@@ -25,9 +25,7 @@ class RetouchTests(unittest.TestCase):
             [(2, 2)],
             mode="clone",
             diameter=1,
-            clone_origin=(1, 1),
-            clone_anchor=(2, 2),
-            source_image=source,
+            color=(220, 40, 80),
         )
 
         self.assertEqual(erased.getpixel((2, 2))[3], 0)
@@ -58,7 +56,7 @@ class RetouchTests(unittest.TestCase):
 
         self.assertEqual(edited.getpixel((2, 2)), (200, 100, 50, 128))
 
-    def test_clone_color_copies_rgb_but_preserves_destination_alpha(self) -> None:
+    def test_clone_color_paints_selected_rgb_but_preserves_destination_alpha(self) -> None:
         image = Image.new("RGBA", (6, 2), (0, 0, 0, 255))
         image.putpixel((1, 0), (220, 40, 80, 255))
         image.putpixel((4, 0), (10, 20, 30, 90))
@@ -68,12 +66,10 @@ class RetouchTests(unittest.TestCase):
             [(4, 0)],
             mode="clone",
             radius=1,
-            clone_origin=(1, 0),
-            clone_anchor=(4, 0),
-            source_image=image,
+            color=(90, 80, 70),
         )
 
-        self.assertEqual(edited.getpixel((4, 0)), (220, 40, 80, 90))
+        self.assertEqual(edited.getpixel((4, 0)), (90, 80, 70, 90))
 
 
 if __name__ == "__main__":

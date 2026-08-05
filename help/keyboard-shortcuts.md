@@ -17,4 +17,4 @@
 
 In Select mode, the arrow keys nudge the selection by one pixel. `WASD` pans the source view.
 
-In Paint Cleanup mode, drag to apply the selected mode. Alt-click chooses a Clone Color source point.
+In Paint Cleanup mode, drag to apply the selected mode. In Clone Color mode, Shift+left-click samples a pixel’s exact RGB color; click or drag to paint it, and Shift-click again to replace the sample.

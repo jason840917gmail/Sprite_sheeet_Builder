@@ -505,7 +505,7 @@ class SourceViewer(QGraphicsView):
                 point = self._clamped_scene_point(self._event_pos(event))
                 self._show_retouch_cursor(point)
                 point_tuple = (round(point.x()), round(point.y()))
-                if event.modifiers() & Qt.AltModifier:
+                if event.modifiers() & Qt.ShiftModifier:
                     self.retouchSampleRequested.emit(point_tuple)
                 else:
                     self._retouching = True

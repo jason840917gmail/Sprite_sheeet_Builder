@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         self._source_preview_override: Image.Image | None = None
         self._retouch_target = "source"
         self._retouch_bucket_index: int | None = None
+        self._retouch_clone_color: tuple[int, int, int] | None = None
         self._retouch_clone_origin: tuple[int, int] | None = None
         self._retouch_clone_anchor: tuple[int, int] | None = None
         self._retouch_clone_snapshot: Image.Image | None = None
@@ -1798,6 +1799,7 @@ class MainWindow(QMainWindow):
         return image
 
     def _reset_retouch_state(self) -> None:
+        self._retouch_clone_color = None
         self._retouch_clone_origin = None
         self._retouch_clone_anchor = None
         self._retouch_clone_snapshot = None
@@ -1807,9 +1809,10 @@ class MainWindow(QMainWindow):
         self._retouch_stroke_changed = False
 
     def _retouch_mode_changed(self, _mode: str) -> None:
+        self._retouch_clone_color = None
         self._retouch_clone_origin = None
         self._retouch_clone_snapshot = None
-        self.retouch_panel.set_status("Alt-click in Clone Color mode to choose a source point.")
+        self.retouch_panel.set_status("Shift-click in Clone Color mode to sample a color, then click to paint it.")
 
     def _retouch_target_changed(self, target: str) -> None:
         if self.source_viewer.current_tool() == "retouch":
@@ -1817,7 +1820,7 @@ class MainWindow(QMainWindow):
 
     def _retouch_sample_requested(self, point: object) -> None:
         if self.retouch_panel.current_mode() != "clone":
-            self.retouch_panel.set_status("Alt-click sets a source point only in Clone Color mode.")
+            self.retouch_panel.set_status("Shift-click samples a color only in Clone Color mode.")
             return
         if not isinstance(point, tuple) or len(point) != 2:
             return
@@ -1831,10 +1834,10 @@ class MainWindow(QMainWindow):
         x = min(max(int(point[0]), 0), image.width - 1)
         y = min(max(int(point[1]), 0), image.height - 1)
         red, green, blue, _alpha = image.convert("RGBA").getpixel((x, y))
-        self._retouch_clone_origin = (x, y)
+        self._retouch_clone_color = (red, green, blue)
         self.retouch_panel.set_color((red, green, blue))
         self.retouch_panel.set_status(
-            f"Clone source set at ({x}, {y}) - sampled #{red:02X}{green:02X}{blue:02X}. Drag to paint."
+            f"Sampled #{red:02X}{green:02X}{blue:02X} at ({x}, {y}). Click or drag to paint this exact color."
         )
         return True
 
@@ -1846,8 +1849,8 @@ class MainWindow(QMainWindow):
             self.retouch_panel.set_status("Open an image or select a bucket tile first.")
             return
         mode = self.retouch_panel.current_mode()
-        if mode == "clone" and self._retouch_clone_origin is None:
-            self._sample_retouch_color((int(point[0]), int(point[1])))
+        if mode == "clone" and self._retouch_clone_color is None:
+            self.retouch_panel.set_status("Shift-click a pixel first to choose the Clone Color.")
             return
         self._retouch_stroke_changed = False
         self._retouch_clone_anchor = (int(point[0]), int(point[1]))
@@ -1873,7 +1876,11 @@ class MainWindow(QMainWindow):
             mode=self.retouch_panel.current_mode(),
             diameter=self.retouch_panel.brush_diameter(),
             opacity=self.retouch_panel.brush_opacity(),
-            color=self.retouch_panel.color(),
+            color=(
+                self._retouch_clone_color
+                if self.retouch_panel.current_mode() == "clone" and self._retouch_clone_color is not None
+                else self.retouch_panel.color()
+            ),
             clone_origin=self._retouch_clone_origin,
             clone_anchor=self._retouch_clone_anchor,
             source_image=self._retouch_clone_snapshot,

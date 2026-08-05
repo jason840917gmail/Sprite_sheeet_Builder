@@ -32,7 +32,7 @@ Updated: 2026-08-05
 - Converted Paint Cleanup brush controls and Source Background threshold controls to horizontal sliders with visible values; Paint bucket clicks now select and preview the tile automatically.
 - Added a Paint Cleanup tool with Erase, Paint Color, and Clone Color modes. It can edit a source review candidate or the selected bucket tile; source edits require explicit activation, while bucket strokes are undoable.
 - Added a live image-space brush footprint that scales with zoom, hides the OS crosshair while active, and disappears on tool exit or pointer leave.
-- Clone Color now samples the clicked RGB pixel into the paint swatch and treats the first normal click as sample-only; switching away from Paint restores the Image or Video settings panel.
+- Clone Color now uses Shift+left-click to sample an RGB pixel and every normal click/drag paints that exact sampled color; Shift-click replaces the sample, and switching away from Paint restores the Image or Video settings panel.
 - Brush application now honors the displayed pixel diameter exactly; a 1 px Erase, Paint, or Clone stroke affects only the clicked pixel.
 
 - Created Python package structure under `sprite_sheet_cleaner/`.

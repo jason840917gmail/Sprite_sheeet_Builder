@@ -29,7 +29,7 @@ class RetouchPanel(QWidget):
         self.mode.addItem("Clone Color", "clone")
         self.mode.setToolTip(
             "Erase makes pixels transparent. Paint Color applies the selected RGB color. "
-            "Clone Color copies RGB from an Alt-clicked source point."
+            "Clone Color samples an RGB pixel with Shift+left-click, then paints that exact color."
         )
 
         self.target = QComboBox()
@@ -54,11 +54,11 @@ class RetouchPanel(QWidget):
         self.opacity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self.color_button = QPushButton()
-        self.color_button.setToolTip("Color used by Paint Color. Clone Color ignores this swatch.")
+        self.color_button.setToolTip("Color used by Paint Color. Clone Color uses the last Shift+click sample.")
         self.color_button.clicked.connect(self._choose_color)
         self._update_color_button()
 
-        self.status_label = QLabel("Alt-click in Clone Color mode to choose a source point.")
+        self.status_label = QLabel("Shift-click in Clone Color mode to sample a color, then click to paint it.")
         self.status_label.setWordWrap(True)
 
         form = QFormLayout()
