@@ -26,6 +26,7 @@ from sprite_sheet_cleaner.app.jobs.qt_job_controller import JobHandle, QtJobCont
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
 from sprite_sheet_cleaner.app.services.source_repository import SourceRepository
 from sprite_sheet_cleaner.app.services.project_service import load_model_project, save_model_project
+from sprite_sheet_cleaner.app.services.legacy_project_importer import load_legacy_project_into_model
 from sprite_sheet_cleaner.app.utils.tool_icons import create_grid_icon, create_pointer_icon, create_select_icon
 from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 from sprite_sheet_cleaner.app.widgets.bucket_panel import BucketPanel
@@ -395,7 +396,7 @@ class MainWindow(QMainWindow):
                 raise FileNotFoundError(f"Source image was not found: {source_path}")
             with Image.open(source_path) as image:
                 self.source_image = image.convert("RGBA")
-            self.model.load_project_data(data, self.source_image)
+            load_legacy_project_into_model(data, self.source_image, self.model)
         except Exception as exc:
             QMessageBox.critical(self, "Load project failed", str(exc))
             return
