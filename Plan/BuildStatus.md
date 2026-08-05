@@ -34,6 +34,7 @@ Updated: 2026-08-05
 - Added a live image-space brush footprint that scales with zoom, hides the OS crosshair while active, and disappears on tool exit or pointer leave.
 - Clone Color now uses Shift+left-click to sample an RGB pixel and every normal click/drag paints that exact sampled color; Shift-click replaces the sample, and switching away from Paint restores the Image or Video settings panel.
 - Brush application now honors the displayed pixel diameter exactly; a 1 px Erase, Paint, or Clone stroke affects only the clicked pixel.
+- Paint Color and Clone Color now source-over RGB and alpha, so they can repair transparent pixels instead of leaving them invisible.
 
 - Created Python package structure under `sprite_sheet_cleaner/`.
 - Added core dataclasses:
@@ -116,7 +117,7 @@ Updated: 2026-08-05
 ## Verified
 
 - `python -m unittest discover -s sprite_sheet_cleaner\tests`
-- Passed: 131 tests; 25 Qt tests skipped because PySide6 is not installed in the current runtime.
+- Passed: 132 tests; 25 Qt tests skipped because PySide6 is not installed in the current runtime.
 - `python -m compileall -q sprite_sheet_cleaner`
   - Passed
 - `.venv` offscreen Qt layout smoke test

@@ -59,10 +59,21 @@ def apply_retouch_stroke(
 
         if mode in {"paint", "clone"}:
             source_rgb = np.array(color, dtype=np.float32)
-            target_array[:, :, :3] = (
-                target_array[:, :, :3] * (1.0 - mask[:, :, None])
-                + source_rgb[None, None, :] * mask[:, :, None]
+            destination_alpha = target_array[:, :, 3] / 255.0
+            output_alpha = mask + destination_alpha * (1.0 - mask)
+            output_premultiplied = (
+                source_rgb[None, None, :] * mask[:, :, None]
+                + target_array[:, :, :3]
+                * destination_alpha[:, :, None]
+                * (1.0 - mask[:, :, None])
             )
+            has_alpha = output_alpha > 1e-6
+            target_array[:, :, :3] = np.where(
+                has_alpha[:, :, None],
+                output_premultiplied / np.maximum(output_alpha[:, :, None], 1e-6),
+                target_array[:, :, :3],
+            )
+            target_array[:, :, 3] = output_alpha * 255.0
             continue
 
     target_array = np.clip(target_array, 0, 255).astype(np.uint8)

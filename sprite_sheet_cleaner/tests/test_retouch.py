@@ -43,7 +43,7 @@ class RetouchTests(unittest.TestCase):
         self.assertEqual(edited.getpixel((2, 2)), (10, 20, 30, 0))
         self.assertEqual(edited.getpixel((0, 0)), (10, 20, 30, 255))
 
-    def test_paint_color_changes_rgb_and_preserves_alpha(self) -> None:
+    def test_paint_color_composites_rgb_and_alpha(self) -> None:
         image = Image.new("RGBA", (5, 5), (10, 20, 30, 128))
 
         edited = apply_retouch_stroke(
@@ -54,9 +54,9 @@ class RetouchTests(unittest.TestCase):
             color=(200, 100, 50),
         )
 
-        self.assertEqual(edited.getpixel((2, 2)), (200, 100, 50, 128))
+        self.assertEqual(edited.getpixel((2, 2)), (200, 100, 50, 255))
 
-    def test_clone_color_paints_selected_rgb_but_preserves_destination_alpha(self) -> None:
+    def test_clone_color_paints_selected_rgb_and_alpha(self) -> None:
         image = Image.new("RGBA", (6, 2), (0, 0, 0, 255))
         image.putpixel((1, 0), (220, 40, 80, 255))
         image.putpixel((4, 0), (10, 20, 30, 90))
@@ -69,7 +69,30 @@ class RetouchTests(unittest.TestCase):
             color=(90, 80, 70),
         )
 
-        self.assertEqual(edited.getpixel((4, 0)), (90, 80, 70, 90))
+        self.assertEqual(edited.getpixel((4, 0)), (90, 80, 70, 255))
+
+    def test_paint_and_clone_reveal_transparent_pixels(self) -> None:
+        image = Image.new("RGBA", (3, 1), (255, 255, 255, 0))
+
+        painted = apply_retouch_stroke(
+            image,
+            [(1, 0)],
+            mode="paint",
+            diameter=1,
+            color=(40, 80, 120),
+        )
+        cloned = apply_retouch_stroke(
+            image,
+            [(1, 0)],
+            mode="clone",
+            diameter=1,
+            color=(40, 80, 120),
+        )
+
+        self.assertEqual(painted.getpixel((1, 0)), (40, 80, 120, 255))
+        self.assertEqual(cloned.getpixel((1, 0)), (40, 80, 120, 255))
+        self.assertEqual(painted.getpixel((0, 0))[3], 0)
+        self.assertEqual(cloned.getpixel((2, 0))[3], 0)
 
 
 if __name__ == "__main__":
