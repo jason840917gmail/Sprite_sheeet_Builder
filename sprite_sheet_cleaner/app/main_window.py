@@ -1871,7 +1871,7 @@ class MainWindow(QMainWindow):
             image,
             points,
             mode=self.retouch_panel.current_mode(),
-            radius=self.retouch_panel.brush_radius(),
+            diameter=self.retouch_panel.brush_diameter(),
             opacity=self.retouch_panel.brush_opacity(),
             color=self.retouch_panel.color(),
             clone_origin=self._retouch_clone_origin,

@@ -93,6 +93,9 @@ class RetouchPanel(QWidget):
     def brush_radius(self) -> int:
         return max(1, self.brush_size.value() // 2)
 
+    def brush_diameter(self) -> int:
+        return max(1, self.brush_size.value())
+
     def brush_opacity(self) -> float:
         return self.opacity.value() / 100.0
 

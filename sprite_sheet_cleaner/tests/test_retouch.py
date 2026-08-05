@@ -8,6 +8,35 @@ from sprite_sheet_cleaner.app.core.retouch import apply_retouch_stroke
 
 
 class RetouchTests(unittest.TestCase):
+    def test_one_pixel_diameter_affects_only_the_center_for_every_mode(self) -> None:
+        source = Image.new("RGBA", (5, 5), (10, 20, 30, 255))
+        source.putpixel((1, 1), (220, 40, 80, 255))
+
+        erased = apply_retouch_stroke(source, [(2, 2)], mode="erase", diameter=1)
+        painted = apply_retouch_stroke(
+            source,
+            [(2, 2)],
+            mode="paint",
+            diameter=1,
+            color=(200, 100, 50),
+        )
+        cloned = apply_retouch_stroke(
+            source,
+            [(2, 2)],
+            mode="clone",
+            diameter=1,
+            clone_origin=(1, 1),
+            clone_anchor=(2, 2),
+            source_image=source,
+        )
+
+        self.assertEqual(erased.getpixel((2, 2))[3], 0)
+        self.assertEqual(erased.getpixel((1, 1))[3], 255)
+        self.assertEqual(painted.getpixel((2, 2))[:3], (200, 100, 50))
+        self.assertEqual(painted.getpixel((1, 1))[:3], (220, 40, 80))
+        self.assertEqual(cloned.getpixel((2, 2))[:3], (220, 40, 80))
+        self.assertEqual(cloned.getpixel((1, 1))[:3], (220, 40, 80))
+
     def test_erase_brush_reduces_alpha_without_changing_rgb(self) -> None:
         image = Image.new("RGBA", (5, 5), (10, 20, 30, 255))
 
