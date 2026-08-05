@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QPushButton,
-    QSpinBox,
+    QSlider,
+    QHBoxLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -36,17 +37,21 @@ class RetouchPanel(QWidget):
         self.target.addItem("Selected Bucket Tile", "bucket")
         self.target.setToolTip("Choose whether brush strokes edit the source preview or the selected bucket tile.")
 
-        self.brush_size = QSpinBox()
+        self.brush_size = QSlider(Qt.Horizontal)
         self.brush_size.setRange(1, 512)
         self.brush_size.setValue(24)
-        self.brush_size.setSuffix(" px")
         self.brush_size.setToolTip("Diameter of the soft brush in image pixels.")
+        self.brush_size_value = QLabel()
+        self.brush_size_value.setMinimumWidth(52)
+        self.brush_size_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.opacity = QSpinBox()
+        self.opacity = QSlider(Qt.Horizontal)
         self.opacity.setRange(1, 100)
         self.opacity.setValue(100)
-        self.opacity.setSuffix("%")
         self.opacity.setToolTip("Strength of each brush stroke.")
+        self.opacity_value = QLabel()
+        self.opacity_value.setMinimumWidth(52)
+        self.opacity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self.color_button = QPushButton()
         self.color_button.setToolTip("Color used by Paint Color. Clone Color ignores this swatch.")
@@ -60,8 +65,8 @@ class RetouchPanel(QWidget):
         form.setContentsMargins(0, 0, 0, 0)
         form.addRow("Mode", self.mode)
         form.addRow("Target", self.target)
-        form.addRow("Brush size", self.brush_size)
-        form.addRow("Opacity", self.opacity)
+        form.addRow("Brush size", self._slider_row(self.brush_size, self.brush_size_value))
+        form.addRow("Opacity", self._slider_row(self.opacity, self.opacity_value))
         form.addRow("Paint color", self.color_button)
 
         layout = QVBoxLayout(self)
@@ -75,6 +80,9 @@ class RetouchPanel(QWidget):
 
         self.mode.currentIndexChanged.connect(lambda: self.modeChanged.emit(str(self.mode.currentData())))
         self.target.currentIndexChanged.connect(lambda: self.targetChanged.emit(str(self.target.currentData())))
+        self.brush_size.valueChanged.connect(self._update_value_labels)
+        self.opacity.valueChanged.connect(self._update_value_labels)
+        self._update_value_labels()
 
     def current_mode(self) -> str:
         return str(self.mode.currentData())
@@ -109,6 +117,19 @@ class RetouchPanel(QWidget):
             return
         self._color = (color.red(), color.green(), color.blue())
         self._update_color_button()
+
+    def _slider_row(self, slider: QSlider, value_label: QLabel) -> QWidget:
+        row = QWidget(self)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(slider, 1)
+        layout.addWidget(value_label)
+        return row
+
+    def _update_value_labels(self, *_args) -> None:
+        self.brush_size_value.setText(f"{self.brush_size.value()} px")
+        self.opacity_value.setText(f"{self.opacity.value()}%")
 
     def _update_color_button(self) -> None:
         r, g, b = self._color

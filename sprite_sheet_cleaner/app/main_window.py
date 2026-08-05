@@ -1715,13 +1715,13 @@ class MainWindow(QMainWindow):
         if not 0 <= index < len(self.model.tiles):
             return
         tile = self.model.tiles[index]
-        if self.source_image is None:
-            return
         if self.source_viewer.current_tool() == "retouch":
-            if self.retouch_panel.current_target() == "bucket":
-                self._prepare_retouch_target("bucket")
+            if self.retouch_panel.current_target() != "bucket":
+                self.retouch_panel.target.setCurrentIndex(1)
             else:
-                self.retouch_panel.set_status("Paint Cleanup is targeting Source Preview. Choose Selected Bucket Tile to edit this tile.")
+                self._prepare_retouch_target("bucket")
+            return
+        if self.source_image is None:
             return
         self._bucket_preview_active = True
         self.source_viewer.set_image(pil_to_qimage(tile.image_rgba))
@@ -1889,7 +1889,7 @@ class MainWindow(QMainWindow):
                     engine_id="manual_retouch",
                     settings={
                         "mode": self.retouch_panel.current_mode(),
-                        "brush_size": self.retouch_panel.brush_size().value(),
+                        "brush_size": self.retouch_panel.brush_size.value(),
                         "opacity": self.retouch_panel.brush_opacity(),
                         "target": "source",
                     },
@@ -2067,9 +2067,17 @@ class MainWindow(QMainWindow):
         self.source_viewer.set_grid_added_rects([tile.source_rect for tile in self.model.tiles])
         sheet = build_sheet(self.model.tiles, self.model.settings, allow_overflow=True)
         self.final_preview.set_preview(sheet, len(self.model.tiles), self.model.settings, self.model.tiles)
+        self._refresh_retouch_bucket_preview()
         self._refresh_action_context()
         self._update_status()
 
+    def _refresh_retouch_bucket_preview(self) -> None:
+        if self.source_viewer.current_tool() != "retouch" or self._retouch_target != "bucket":
+            return
+        index = self._retouch_bucket_index
+        if index is None or not 0 <= index < len(self.model.tiles):
+            return
+        self.source_viewer.refresh_image(pil_to_qimage(self.model.tiles[index].image_rgba))
     def _refresh_action_context(self) -> None:
         capacity = sheet_capacity(self.model.settings)
         self.settings_panel.set_action_context(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
-    QSpinBox,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -57,18 +57,27 @@ class SourceBackgroundPanel(QWidget):
         self.color_button.setToolTip("Background color used by color-based removal engines.")
         self.detect_button = QPushButton("Detect")
         self.detect_button.setToolTip("Sample the current source border and set the background color automatically.")
-        self.tolerance = QSpinBox()
+        self.tolerance = QSlider(Qt.Horizontal)
         self.tolerance.setRange(0, 255)
         self.tolerance.setValue(30)
         self.tolerance.setToolTip("Exact Key color distance. Higher values remove a wider range of similar colors.")
-        self.transparent_threshold = QSpinBox()
+        self.tolerance_value = QLabel()
+        self.tolerance_value.setMinimumWidth(36)
+        self.tolerance_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.transparent_threshold = QSlider(Qt.Horizontal)
         self.transparent_threshold.setRange(0, 255)
         self.transparent_threshold.setValue(24)
         self.transparent_threshold.setToolTip("Alpha below this value becomes fully transparent.")
-        self.foreground_threshold = QSpinBox()
+        self.transparent_threshold_value = QLabel()
+        self.transparent_threshold_value.setMinimumWidth(36)
+        self.transparent_threshold_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.foreground_threshold = QSlider(Qt.Horizontal)
         self.foreground_threshold.setRange(1, 255)
         self.foreground_threshold.setValue(64)
         self.foreground_threshold.setToolTip("Alpha above this value stays solid; the middle range is feathered.")
+        self.foreground_threshold_value = QLabel()
+        self.foreground_threshold_value.setMinimumWidth(36)
+        self.foreground_threshold_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.apply_button = QPushButton("Process")
         self.apply_button.setToolTip(
             "Process Source — create a reviewable candidate. The original source remains unchanged."
@@ -103,9 +112,15 @@ class SourceBackgroundPanel(QWidget):
         form.addRow("Engine", self.engine)
         form.addRow("Compute", self.compute)
         form.addRow("Background", color_row)
-        form.addRow("Exact tolerance", self.tolerance)
-        form.addRow("Transparent threshold", self.transparent_threshold)
-        form.addRow("Foreground threshold", self.foreground_threshold)
+        form.addRow("Exact tolerance", self._slider_row(self.tolerance, self.tolerance_value))
+        form.addRow(
+            "Transparent threshold",
+            self._slider_row(self.transparent_threshold, self.transparent_threshold_value),
+        )
+        form.addRow(
+            "Foreground threshold",
+            self._slider_row(self.foreground_threshold, self.foreground_threshold_value),
+        )
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -141,12 +156,16 @@ class SourceBackgroundPanel(QWidget):
         self.tolerance.valueChanged.connect(self._emit_settings_changed)
         self.transparent_threshold.valueChanged.connect(self._emit_settings_changed)
         self.foreground_threshold.valueChanged.connect(self._emit_settings_changed)
+        self.tolerance.valueChanged.connect(self._update_threshold_labels)
+        self.transparent_threshold.valueChanged.connect(self._update_threshold_labels)
+        self.foreground_threshold.valueChanged.connect(self._update_threshold_labels)
         self.apply_button.clicked.connect(self.applyRequested.emit)
         self.activate_button.clicked.connect(self.activateRequested.emit)
         self.apply_bucket_button.clicked.connect(self.applyToBucketRequested.emit)
         self.discard_button.clicked.connect(self.discardRequested.emit)
         self.cancel_button.clicked.connect(self.cancelRequested.emit)
         self._update_color_button()
+        self._update_threshold_labels()
 
     def set_engine_available(self, engine_id: str, available: bool) -> None:
         for index in range(self.engine.count()):
@@ -200,6 +219,20 @@ class SourceBackgroundPanel(QWidget):
         self._background_color = (color.red(), color.green(), color.blue())
         self._update_color_button()
         self._emit_settings_changed()
+
+    def _slider_row(self, slider: QSlider, value_label: QLabel) -> QWidget:
+        row = QWidget(self)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(slider, 1)
+        layout.addWidget(value_label)
+        return row
+
+    def _update_threshold_labels(self, *_args) -> None:
+        self.tolerance_value.setText(str(self.tolerance.value()))
+        self.transparent_threshold_value.setText(str(self.transparent_threshold.value()))
+        self.foreground_threshold_value.setText(str(self.foreground_threshold.value()))
 
     def _update_color_button(self) -> None:
         r, g, b = self._background_color
