@@ -265,7 +265,6 @@ class SettingsPanel(QWidget):
             self.sheet_columns,
             self.sheet_rows,
             self.tolerance_slider,
-            self.tolerance_spin,
             self.padding,
         ):
             control.valueChanged.connect(self._emit_settings_changed)

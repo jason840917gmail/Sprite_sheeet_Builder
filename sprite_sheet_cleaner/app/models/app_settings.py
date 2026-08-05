@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from sprite_sheet_cleaner.app.models.sheet_settings import SheetSettings
+from sprite_sheet_cleaner.app.models.source_processing_settings import SourceProcessingSettings
+from sprite_sheet_cleaner.app.models.tile_settings import TileSettings
+
 
 ScaleMode = Literal["none", "scale_down_only", "scale_to_fit"]
 Anchor = Literal["center", "bottom-center"]
@@ -57,6 +61,34 @@ class AppSettings:
         data = asdict(self)
         data["background_color"] = list(self.background_color)
         return data
+
+    def source_processing_settings(self) -> SourceProcessingSettings:
+        return SourceProcessingSettings(
+            remove_background=self.remove_background,
+            background_color=self.background_color,
+            tolerance=self.tolerance,
+            edge_bleed=self.edge_bleed,
+        ).validated()
+
+    def tile_settings(self) -> TileSettings:
+        return TileSettings(
+            tile_width=self.tile_width,
+            tile_height=self.tile_height,
+            lock_tile_aspect=self.lock_tile_aspect,
+            selection_columns=self.selection_columns,
+            selection_rows=self.selection_rows,
+            trim_transparent=self.trim_transparent,
+            scale_mode=self.scale_mode,
+            padding=self.padding,
+            anchor=self.anchor,
+        ).validated()
+
+    def sheet_settings(self) -> SheetSettings:
+        return SheetSettings(
+            sheet_columns=self.sheet_columns,
+            sheet_rows=self.sheet_rows,
+            match_sheet_to_grid=self.match_sheet_to_grid,
+        ).validated()
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "AppSettings":

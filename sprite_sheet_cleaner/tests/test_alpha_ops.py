@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from PIL import Image
+import numpy as np
 
 from sprite_sheet_cleaner.app.core.alpha_ops import dilate_transparent_rgb, resize_premultiplied
 from sprite_sheet_cleaner.tests.helpers.image_assertions import assert_same_alpha
@@ -25,7 +26,7 @@ class AlphaOpsTests(unittest.TestCase):
 
         result = dilate_transparent_rgb(image, radius=0)
 
-        self.assertEqual(list(result.getdata()), list(image.getdata()))
+        self.assertTrue(np.array_equal(np.asarray(result), np.asarray(image)))
 
     def test_premultiplied_resize_keeps_edge_color(self) -> None:
         image = Image.new("RGBA", (2, 1), (0, 0, 0, 0))
