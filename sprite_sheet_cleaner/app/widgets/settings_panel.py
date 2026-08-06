@@ -23,6 +23,7 @@ from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 
 class SettingsPanel(QWidget):
     settingsChanged = Signal(object)
+    tileProcessingChanged = Signal(object)
     addSelectionRequested = Signal()
     addAllRequested = Signal()
     detectBackgroundRequested = Signal()
@@ -32,6 +33,7 @@ class SettingsPanel(QWidget):
         self._background_color = (255, 0, 255)
         self._updating = False
         self._last_tile_dimension = "width"
+        self._tile_job_running = False
 
         self.tile_width = self._spin(1, 4096, 256)
         self.tile_height = self._spin(1, 4096, 256)
@@ -59,6 +61,17 @@ class SettingsPanel(QWidget):
         self.match_sheet_to_grid.setAccessibleName("Match painted grid")
         self.remove_background = QCheckBox()
         self.remove_background.setChecked(True)
+        self.remove_background.setToolTip(
+            "Automatically remove the background from each new image tile before it is added to the bucket."
+        )
+        self.tile_background_engine = QComboBox()
+        self.tile_background_engine.addItem("Exact Key (default)", "exact_key")
+        self.tile_background_engine.addItem("Smart Solid", "smart_solid")
+        self.tile_background_engine.addItem("rembg — U2Net (single tile)", "rembg")
+        self.tile_background_engine.setToolTip(
+            "Remover used when adding image tiles. rembg/U2Net is intended for one tile at a time, "
+            "not a full sprite sheet."
+        )
         self.color_button = QPushButton()
         self.color_button.setFixedWidth(72)
         self.detect_color_button = QPushButton("Detect")
@@ -128,6 +141,12 @@ class SettingsPanel(QWidget):
         color_row.addWidget(self.detect_color_button)
         color_row.addStretch(1)
 
+        tile_background_row = QHBoxLayout()
+        tile_background_row.setContentsMargins(0, 0, 0, 0)
+        tile_background_row.setSpacing(6)
+        tile_background_row.addWidget(self.remove_background)
+        tile_background_row.addWidget(self.tile_background_engine, 1)
+
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
@@ -136,7 +155,7 @@ class SettingsPanel(QWidget):
         form.addRow("Tile / selection size", tile_size_row)
         form.addRow("Selection grid", self.selection_grid_field)
         self._selection_grid_label = form.labelForField(self.selection_grid_field)
-        form.addRow("Remove background", self.remove_background)
+        form.addRow("Remove background", tile_background_row)
         form.addRow("Background color", color_row)
         form.addRow("Tolerance", tolerance_row)
         form.addRow("Trim transparent", self.trim_transparent)
@@ -163,6 +182,7 @@ class SettingsPanel(QWidget):
         layout.addStretch(1)
 
         self._update_color_button()
+        self._update_tile_background_state()
         self._connect_signals()
         self.set_action_context("select", False, 0, 64)
 
@@ -177,6 +197,7 @@ class SettingsPanel(QWidget):
             sheet_rows=self.sheet_rows.value(),
             match_sheet_to_grid=self.match_sheet_to_grid.isChecked(),
             remove_background=self.remove_background.isChecked(),
+            tile_background_engine=self.tile_background_engine.currentData(),
             background_color=self._background_color,
             tolerance=self.tolerance_spin.value(),
             trim_transparent=self.trim_transparent.isChecked(),
@@ -198,6 +219,8 @@ class SettingsPanel(QWidget):
         self.sheet_rows.setValue(settings.sheet_rows)
         self.match_sheet_to_grid.setChecked(settings.match_sheet_to_grid)
         self.remove_background.setChecked(settings.remove_background)
+        engine_index = self.tile_background_engine.findData(settings.tile_background_engine)
+        self.tile_background_engine.setCurrentIndex(max(engine_index, 0))
         self._background_color = settings.background_color
         self.tolerance_slider.setValue(settings.tolerance)
         self.tolerance_spin.setValue(settings.tolerance)
@@ -208,6 +231,7 @@ class SettingsPanel(QWidget):
         anchor_index = self.anchor.findData(settings.anchor)
         self.anchor.setCurrentIndex(max(anchor_index, 0))
         self._update_color_button()
+        self._update_tile_background_state()
         self._update_sheet_match_state()
         self._updating = False
 
@@ -220,14 +244,41 @@ class SettingsPanel(QWidget):
             self.tolerance_spin.setValue(minimum_tolerance)
         self._update_color_button()
         self._updating = False
-        self._emit_settings_changed()
+        self._emit_tile_processing_changed()
+
+    def set_tile_engine_available(self, engine_id: str, available: bool) -> None:
+        for index in range(self.tile_background_engine.count()):
+            if self.tile_background_engine.itemData(index) != engine_id:
+                continue
+            item = self.tile_background_engine.model().item(index)
+            if item is not None:
+                item.setEnabled(available)
+            if engine_id == "rembg":
+                self.tile_background_engine.setItemText(
+                    index,
+                    "rembg — U2Net (single tile)" if available else "rembg — U2Net (install model)",
+                )
+            if not available and self.tile_background_engine.currentIndex() == index:
+                self.tile_background_engine.setCurrentIndex(0)
+            return
+
+    def set_tile_job_running(self, running: bool) -> None:
+        self._tile_job_running = running
+        self.add_button.setEnabled(not running)
+        if running:
+            self.add_all_button.setEnabled(False)
+        self.remove_background.setEnabled(not running)
+        self.tile_background_engine.setEnabled(not running and self.remove_background.isChecked())
+
+    def _update_tile_background_state(self) -> None:
+        self.tile_background_engine.setEnabled(self.remove_background.isChecked())
 
     def set_bucket_capacity_state(self, tile_count: int, capacity: int) -> None:
         if tile_count >= capacity:
             self.add_button.setEnabled(False)
             self.add_button.setText(f"Bucket Full ({tile_count}/{capacity})")
         else:
-            self.add_button.setEnabled(True)
+            self.add_button.setEnabled(not self._tile_job_running)
             self.add_button.setText("Add Selection to Bucket")
 
     def set_action_context(self, tool: str, grid_valid: bool, tile_count: int, capacity: int) -> None:
@@ -238,7 +289,14 @@ class SettingsPanel(QWidget):
 
         grid_active = tool == "grid"
         self.add_all_button.setVisible(grid_active)
-        self.add_all_button.setEnabled(grid_active and grid_valid and tile_count < capacity)
+        single_tile_ai = self.remove_background.isChecked() and self.tile_background_engine.currentData() == "rembg"
+        self.add_all_button.setEnabled(
+            grid_active and grid_valid and tile_count < capacity and not single_tile_ai and not self._tile_job_running
+        )
+        if single_tile_ai:
+            self.add_all_button.setToolTip("rembg/U2Net processes one image tile at a time; choose another tile remover for Add All.")
+        else:
+            self.add_all_button.setToolTip("Add every cell in the current Grid tool layout")
 
     def set_matched_sheet_dimensions(self, columns: int, rows: int) -> None:
         was_updating = self._updating
@@ -264,13 +322,16 @@ class SettingsPanel(QWidget):
         for control in (
             self.sheet_columns,
             self.sheet_rows,
-            self.tolerance_slider,
             self.padding,
         ):
             control.valueChanged.connect(self._emit_settings_changed)
 
-        for control in (self.remove_background, self.trim_transparent):
-            control.toggled.connect(self._emit_settings_changed)
+        self.tolerance_spin.valueChanged.connect(self._emit_tile_processing_changed)
+
+        self.remove_background.toggled.connect(self._tile_background_toggled)
+        self.tile_background_engine.currentIndexChanged.connect(self._emit_tile_processing_changed)
+
+        self.trim_transparent.toggled.connect(self._emit_settings_changed)
 
         for control in (self.scale_mode, self.anchor):
             control.currentIndexChanged.connect(self._emit_settings_changed)
@@ -288,7 +349,7 @@ class SettingsPanel(QWidget):
         if color.isValid():
             self._background_color = (color.red(), color.green(), color.blue())
             self._update_color_button()
-            self._emit_settings_changed()
+            self._emit_tile_processing_changed()
 
     def _update_color_button(self) -> None:
         r, g, b = self._background_color
@@ -339,3 +400,11 @@ class SettingsPanel(QWidget):
     def _emit_settings_changed(self) -> None:
         if not self._updating:
             self.settingsChanged.emit(self.settings())
+
+    def _tile_background_toggled(self, _checked: bool) -> None:
+        self._update_tile_background_state()
+        self._emit_tile_processing_changed()
+
+    def _emit_tile_processing_changed(self, *_args) -> None:
+        if not self._updating:
+            self.tileProcessingChanged.emit(self.settings())

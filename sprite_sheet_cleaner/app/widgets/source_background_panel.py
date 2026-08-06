@@ -41,7 +41,8 @@ class SourceBackgroundPanel(QWidget):
             self.engine.model().item(index).setEnabled(False)
         self.engine.setToolTip(
             "Choose how the source background is removed. Exact Key is for a known flat color; "
-            "Smart Solid follows connected border background; rembg and BEN2 are optional AI engines."
+            "Smart Solid follows connected border background; rembg and BEN2 are optional AI engines. "
+            "rembg/U2Net is intended for one isolated tile or object, not a complete sprite sheet."
         )
         self.compute = QComboBox()
         self.compute.addItem("Auto (CUDA, then CPU)", "auto")

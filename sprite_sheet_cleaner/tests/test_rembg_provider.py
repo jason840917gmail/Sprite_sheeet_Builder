@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 import tempfile
 import unittest
@@ -41,3 +42,22 @@ class RembgProviderTests(unittest.TestCase):
             self.assertEqual(result.matte.shape, (3, 4))
             self.assertEqual(int(result.matte[0, 0]), 128)
 
+    def test_inference_decodes_encoded_png_mask_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "u2net.onnx"
+            path.write_bytes(b"model")
+
+            def factory(_model_id, **_kwargs):
+                return _Session()
+
+            def remove(_data, *, session, only_mask):
+                self.assertIsInstance(session, _Session)
+                self.assertTrue(only_mask)
+                output = BytesIO()
+                Image.new("L", (2, 2), 128).save(output, format="PNG")
+                return output.getvalue()
+
+            provider = RembgProvider(model_dir=directory, session_factory=factory, remove_function=remove)
+            result = provider.remove(Image.new("RGBA", (4, 3)), object())
+            self.assertEqual(result.matte.shape, (3, 4))
+            self.assertEqual(int(result.matte[0, 0]), 128)

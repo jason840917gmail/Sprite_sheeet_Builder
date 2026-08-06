@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 from sprite_sheet_cleaner.app.models.sheet_settings import SheetSettings
-from sprite_sheet_cleaner.app.models.source_processing_settings import SourceProcessingSettings
+from sprite_sheet_cleaner.app.models.source_processing_settings import BackgroundEngineId, SourceProcessingSettings
 from sprite_sheet_cleaner.app.models.tile_settings import TileSettings
 
 
@@ -26,6 +26,7 @@ class AppSettings:
     sheet_rows: int = 8
     match_sheet_to_grid: bool = False
     remove_background: bool = True
+    tile_background_engine: BackgroundEngineId = "exact_key"
     background_color: tuple[int, int, int] = (255, 0, 255)
     tolerance: int = 30
     trim_transparent: bool = False
@@ -47,6 +48,8 @@ class AppSettings:
             raise ValueError("Edge bleed cannot be negative.")
         if self.tolerance < 0:
             raise ValueError("Tolerance cannot be negative.")
+        if self.tile_background_engine not in {"exact_key", "smart_solid", "rembg", "ben2"}:
+            raise ValueError(f"Unsupported tile background engine: {self.tile_background_engine}")
         if self.scale_mode not in VALID_SCALE_MODES:
             raise ValueError(f"Unsupported scale mode: {self.scale_mode}")
         if self.anchor not in VALID_ANCHORS:
@@ -64,6 +67,15 @@ class AppSettings:
 
     def source_processing_settings(self) -> SourceProcessingSettings:
         return SourceProcessingSettings(
+            remove_background=self.remove_background,
+            background_color=self.background_color,
+            tolerance=self.tolerance,
+            edge_bleed=self.edge_bleed,
+        ).validated()
+
+    def tile_processing_settings(self) -> SourceProcessingSettings:
+        return SourceProcessingSettings(
+            engine=self.tile_background_engine,
             remove_background=self.remove_background,
             background_color=self.background_color,
             tolerance=self.tolerance,

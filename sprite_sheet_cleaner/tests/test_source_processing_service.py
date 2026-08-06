@@ -49,6 +49,25 @@ class SourceProcessingServiceTests(unittest.TestCase):
         self.assertEqual(second[0].size, (256, 256))
         self.assertEqual(first[0].getpixel((128, 128))[3], 255)
 
+    def test_process_tile_uses_selected_tile_background_engine(self) -> None:
+        source = Image.new("RGBA", (8, 8), (255, 0, 255, 255))
+        source.putpixel((2, 2), (20, 40, 60, 255))
+        engine = CountingEngine()
+        service = SourceProcessingService(SourceRepository(), {"smart_solid": engine})
+        settings = AppSettings(
+            tile_width=4,
+            tile_height=4,
+            remove_background=True,
+            tile_background_engine="smart_solid",
+        )
+
+        tile = service.process_tile(source, (0, 0, 4, 4), settings)
+
+        self.assertEqual(engine.calls, 1)
+        self.assertEqual(tile.size, (4, 4))
+        self.assertEqual(tile.getpixel((2, 2))[3], 255)
+        self.assertEqual(tile.getpixel((0, 0))[3], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

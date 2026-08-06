@@ -129,13 +129,22 @@ class RembgProvider:
 def _as_matte(value: object, size: tuple[int, int]) -> np.ndarray:
     if isinstance(value, Image.Image):
         array = np.asarray(value.convert("L"), dtype=np.uint8)
+    elif isinstance(value, (bytes, bytearray, memoryview)):
+        # rembg returns an encoded PNG when the input is bytes (the adapter
+        # intentionally sends PNG bytes to keep the worker boundary simple).
+        # Decode it before asking NumPy to inspect the mask pixels.
+        with Image.open(BytesIO(bytes(value))) as decoded:
+            array = np.asarray(decoded.convert("L"), dtype=np.uint8).copy()
     else:
         array = np.asarray(value)
         array = np.squeeze(array)
         if array.ndim == 3:
             array = array[..., 0]
         if array.ndim != 2:
-            raise ValueError("rembg returned an invalid matte shape.")
+            raise ValueError(
+                "rembg returned an invalid matte shape: "
+                f"{getattr(array, 'shape', None)} ({type(value).__name__})."
+            )
         if np.issubdtype(array.dtype, np.floating):
             if float(np.nanmax(array)) <= 1.0:
                 array = array * 255.0

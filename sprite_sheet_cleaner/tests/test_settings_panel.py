@@ -73,6 +73,20 @@ class SettingsPanelTests(unittest.TestCase):
         panel.set_action_context("grid", True, 10, 10)
         self.assertFalse(panel.add_all_button.isEnabled())
 
+    def test_tile_remover_is_persisted_and_rembg_blocks_add_all(self) -> None:
+        panel = SettingsPanel()
+
+        panel.tile_background_engine.setCurrentIndex(panel.tile_background_engine.findData("rembg"))
+        self.assertEqual(panel.settings().tile_background_engine, "rembg")
+
+        panel.set_action_context("grid", True, 0, 10)
+        self.assertFalse(panel.add_all_button.isEnabled())
+
+        panel.remove_background.setChecked(False)
+        self.assertFalse(panel.tile_background_engine.isEnabled())
+        panel.set_action_context("grid", True, 0, 10)
+        self.assertTrue(panel.add_all_button.isEnabled())
+
 
 if __name__ == "__main__":
     unittest.main()

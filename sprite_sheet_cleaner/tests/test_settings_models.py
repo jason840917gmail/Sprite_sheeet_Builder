@@ -18,6 +18,7 @@ class SettingsModelTests(unittest.TestCase):
             background_color=(10, 20, 30),
             tolerance=12,
             edge_bleed=2,
+            tile_background_engine="smart_solid",
         )
 
         source = settings.source_processing_settings()
@@ -27,6 +28,7 @@ class SettingsModelTests(unittest.TestCase):
         self.assertIsInstance(source, SourceProcessingSettings)
         self.assertEqual(source.background_color, (10, 20, 30))
         self.assertEqual(source.edge_bleed, 2)
+        self.assertEqual(settings.tile_processing_settings().engine, "smart_solid")
         self.assertIsInstance(tile, TileSettings)
         self.assertEqual((tile.tile_width, tile.tile_height), (64, 96))
         self.assertIsInstance(sheet, SheetSettings)
@@ -35,6 +37,10 @@ class SettingsModelTests(unittest.TestCase):
     def test_scoped_settings_validate_threshold_order(self) -> None:
         with self.assertRaises(ValueError):
             SourceProcessingSettings(transparent_threshold=80, foreground_threshold=20).validated()
+
+    def test_tile_background_engine_is_validated(self) -> None:
+        with self.assertRaises(ValueError):
+            AppSettings(tile_background_engine="unknown").validated()
 
 
 if __name__ == "__main__":

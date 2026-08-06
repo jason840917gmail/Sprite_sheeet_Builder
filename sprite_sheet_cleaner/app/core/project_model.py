@@ -122,6 +122,31 @@ class ProjectModel:
         self.tiles.extend(items)
         return items
 
+    def add_tiles_from_processed_images(
+        self,
+        source_image: Image.Image,
+        processed_images: list[tuple[CropRect, Image.Image]],
+    ) -> list[TileItem]:
+        """Add final tile images whose background processing is already complete."""
+        start_index = len(self.tiles)
+        items: list[TileItem] = []
+        for offset, (crop_rect, image_rgba) in enumerate(processed_images):
+            normalized_rect = clamp_crop_rect(source_image, crop_rect)
+            image = image_rgba.convert("RGBA").copy()
+            items.append(
+                TileItem(
+                    name=f"tile_{start_index + offset + 1:03d}",
+                    source_rect=normalized_rect,
+                    source_size=(normalized_rect[2], normalized_rect[3]),
+                    final_size=(image.width, image.height),
+                    image_rgba=image,
+                    source_type="image",
+                    source_path=self.source_image_path,
+                )
+            )
+        self.tiles.extend(items)
+        return items
+
     def remove_tile(self, index: int) -> None:
         if 0 <= index < len(self.tiles):
             del self.tiles[index]

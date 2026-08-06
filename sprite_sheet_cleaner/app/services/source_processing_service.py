@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from PIL import Image
 
-from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop
+from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, crop_source_image, process_crop
 from sprite_sheet_cleaner.app.engines.base import BackgroundEngine
 from sprite_sheet_cleaner.app.engines.postprocess import apply_matte
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
@@ -58,3 +58,34 @@ class SourceProcessingService:
         extraction_settings.remove_background = False
         image = process_crop(active.processed_image, normalized, extraction_settings)
         return image, normalized, active.revision_id, name
+
+    def process_tile(
+        self,
+        source_image: Image.Image,
+        crop_rect: tuple[int, int, int, int],
+        settings: AppSettings,
+        *,
+        progress=None,
+        cancelled=None,
+    ) -> Image.Image:
+        """Create one final tile using the selected tile background engine."""
+        settings.validated()
+        normalized = clamp_crop_rect(source_image, crop_rect)
+        crop = crop_source_image(source_image, normalized)
+        if cancelled is not None and cancelled():
+            raise RuntimeError("Tile processing cancelled.")
+
+        if settings.remove_background:
+            processing_settings = settings.tile_processing_settings()
+            try:
+                engine = self.engines[processing_settings.engine]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Tile background engine is not available: {processing_settings.engine}"
+                ) from exc
+            result = engine.remove(crop, processing_settings, progress=progress, cancelled=cancelled)
+            crop = apply_matte(crop, result)
+
+        extraction_settings = AppSettings.from_dict(settings.to_dict())
+        extraction_settings.remove_background = False
+        return process_crop(crop, (0, 0, crop.width, crop.height), extraction_settings)

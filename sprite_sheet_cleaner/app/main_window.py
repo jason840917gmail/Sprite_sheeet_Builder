@@ -83,6 +83,8 @@ class MainWindow(QMainWindow):
         self.runtime_registry = default_runtime_registry()
         self.command_stack = CommandStack()
         self._source_job: JobHandle | None = None
+        self._tile_job: JobHandle | None = None
+        self._pending_tile_add: dict[str, object] | None = None
         self.job_controller = QtJobController(self)
         self.source_type = "image"
         self.video_source_path: Path | None = None
@@ -339,6 +341,7 @@ class MainWindow(QMainWindow):
         self.video_tabs.currentChanged.connect(self._video_tab_changed)
         self.video_tabs.tabCloseRequested.connect(self._close_video_tab)
         self.settings_panel.settingsChanged.connect(self._settings_changed)
+        self.settings_panel.tileProcessingChanged.connect(self._tile_processing_changed)
         self.settings_panel.addSelectionRequested.connect(self._add_selection_to_bucket)
         self.settings_panel.addAllRequested.connect(self._add_all_grid_cells)
         self.settings_panel.detectBackgroundRequested.connect(self._detect_background_color)
@@ -380,6 +383,7 @@ class MainWindow(QMainWindow):
         self._close_optional_engines()
         self.source_background_panel.set_engine_available("rembg", False)
         self.source_background_panel.set_engine_available("ben2", False)
+        self.settings_panel.set_tile_engine_available("rembg", False)
         engines = {"exact_key": ExactKeyEngine(), "smart_solid": SmartSolidEngine()}
         for manifest in self.runtime_registry.manifests():
             state = self.runtime_registry.state(manifest)
@@ -399,6 +403,8 @@ class MainWindow(QMainWindow):
             )
             engines[provider_id] = engine
             self.source_background_panel.set_engine_available(provider_id, True)
+            if provider_id == "rembg":
+                self.settings_panel.set_tile_engine_available("rembg", True)
         self.source_processing_service.engines = engines
 
     def _close_optional_engines(self) -> None:
@@ -712,6 +718,8 @@ class MainWindow(QMainWindow):
         self._reset_retouch_state()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
         self.model.settings.remove_background = False
+        self._image_settings = self.model.settings
+        self.settings_panel.set_settings(self.model.settings)
         self.source_background_panel.set_candidate_state(False, f"Revision {revision.revision_id[:8]} is active.")
         self.statusBar().showMessage("Activated processed source; existing bucket tiles were not changed.")
 
@@ -1165,8 +1173,10 @@ class MainWindow(QMainWindow):
         self._restore_source_after_bucket_preview()
         if self.source_type == "video":
             return
-        if self.source_repository.document.active_revision is not None:
-            settings.remove_background = False
+        # Tile background processing is controlled by its dedicated signal so
+        # geometry/settings changes do not silently switch the selected remover.
+        settings.remove_background = self.model.settings.remove_background
+        settings.tile_background_engine = self.model.settings.tile_background_engine
         self._image_settings = settings
         self.model.settings = settings
         self._apply_selection_geometry()
@@ -1203,6 +1213,155 @@ class MainWindow(QMainWindow):
         self._refresh_all(selected_index=self.bucket_panel.current_index())
         if self.model.tiles:
             self.statusBar().showMessage("Video settings updated for new frames. Apply them to existing video tiles when ready.")
+
+    def _try_add_image_tiles_with_selected_engine(
+        self,
+        rects: list[tuple[int, int, int, int]],
+        description: str,
+        *,
+        clear_selection_on_success: bool = False,
+    ) -> bool:
+        """Handle non-legacy tile removers; return whether the add was handled."""
+        if self.source_image is None:
+            return False
+        try:
+            settings = self.settings_panel.settings()
+        except Exception as exc:
+            QMessageBox.critical(self, "Tile settings failed", str(exc))
+            return True
+        if not settings.remove_background:
+            return False
+
+        if settings.tile_background_engine == "rembg" and len(rects) != 1:
+            QMessageBox.warning(
+                self,
+                "rembg tile limit",
+                "rembg/U2Net processes one image tile at a time. Select one tile or choose Exact Key/Smart Solid.",
+            )
+            return True
+        if self._tile_job is not None:
+            self.statusBar().showMessage("A tile background job is already running.")
+            return True
+
+        if settings.tile_background_engine == "rembg":
+            self._start_single_tile_background_job(
+                rects[0],
+                settings,
+                description,
+                clear_selection_on_success=clear_selection_on_success,
+            )
+            return True
+
+        before = clone_tiles(self.model.tiles)
+        try:
+            processed = [
+                (
+                    rect,
+                    self.source_processing_service.process_tile(self.source_image, rect, settings),
+                )
+                for rect in rects
+            ]
+            added_tiles = self.model.add_tiles_from_processed_images(self.source_image, processed)
+        except Exception as exc:
+            QMessageBox.critical(self, "Add tiles failed", str(exc))
+            return True
+        self._tag_image_tiles_with_active_revision(added_tiles)
+        self._record_bucket_snapshot(before)
+        if clear_selection_on_success:
+            self.source_viewer.clear_selection()
+        self._refresh_all(selected_index=len(self.model.tiles) - 1)
+        self.statusBar().showMessage(f"Added {len(added_tiles)} tiles from {description}.")
+        return True
+
+    def _start_single_tile_background_job(
+        self,
+        rect: tuple[int, int, int, int],
+        settings: AppSettings,
+        description: str,
+        *,
+        clear_selection_on_success: bool,
+    ) -> None:
+        if self.source_image is None:
+            return
+        source = self.source_image.copy()
+        source_asset = self.source_repository.document.source_asset
+        self._pending_tile_add = {
+            "rect": tuple(int(value) for value in rect),
+            "description": description,
+            "clear_selection": clear_selection_on_success,
+            "before": clone_tiles(self.model.tiles),
+            "source_fingerprint": source_asset.fingerprint if source_asset is not None else None,
+            "source_revision_id": self.source_repository.document.active_revision_id,
+        }
+        self.settings_panel.set_tile_job_running(True)
+        self._tile_job = self.job_controller.start(
+            "tile-background",
+            lambda progress, cancelled: self.source_processing_service.process_tile(
+                source,
+                rect,
+                settings,
+                progress=progress,
+                cancelled=cancelled,
+            ),
+        )
+        self._tile_job.signals.progress.connect(self._tile_job_progress)
+        self._tile_job.signals.completed.connect(self._tile_job_completed)
+        self._tile_job.signals.failed.connect(self._tile_job_failed)
+        self._tile_job.signals.cancelled.connect(self._tile_job_cancelled)
+        self.statusBar().showMessage(f"Processing one tile with rembg/U2Net from {description}…")
+
+    def _tile_job_progress(self, value: float, message: str) -> None:
+        self.statusBar().showMessage(f"{message} ({round(value * 100)}%)")
+
+    def _tile_job_completed(self, image: object) -> None:
+        pending = self._pending_tile_add
+        self._tile_job = None
+        self._pending_tile_add = None
+        self.settings_panel.set_tile_job_running(False)
+        if pending is None or not isinstance(image, Image.Image) or self.source_image is None:
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
+            return
+        source_asset = self.source_repository.document.source_asset
+        if (
+            source_asset is None
+            or source_asset.fingerprint != pending.get("source_fingerprint")
+            or self.source_repository.document.active_revision_id != pending.get("source_revision_id")
+        ):
+            self.statusBar().showMessage("Tile result discarded because the source image changed.")
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
+            return
+        rect = pending["rect"]
+        if not isinstance(rect, tuple):
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
+            return
+        try:
+            added_tiles = self.model.add_tiles_from_processed_images(self.source_image, [(rect, image)])
+        except Exception as exc:
+            QMessageBox.critical(self, "Add tile failed", str(exc))
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
+            return
+        self._tag_image_tiles_with_active_revision(added_tiles)
+        before = pending.get("before")
+        if isinstance(before, list):
+            self._record_bucket_snapshot(before)
+        if pending.get("clear_selection"):
+            self.source_viewer.clear_selection()
+        self._refresh_all(selected_index=len(self.model.tiles) - 1)
+        self.statusBar().showMessage(f"Added {len(added_tiles)} tile from {pending.get('description', 'selection')}.")
+
+    def _tile_job_failed(self, error: object) -> None:
+        self._tile_job = None
+        self._pending_tile_add = None
+        self.settings_panel.set_tile_job_running(False)
+        self._refresh_all(selected_index=self.bucket_panel.current_index())
+        QMessageBox.critical(self, "Tile background removal failed", str(error))
+
+    def _tile_job_cancelled(self) -> None:
+        self._tile_job = None
+        self._pending_tile_add = None
+        self.settings_panel.set_tile_job_running(False)
+        self._refresh_all(selected_index=self.bucket_panel.current_index())
+        self.statusBar().showMessage("Tile background removal cancelled.")
 
     def _apply_video_settings_to_bucket(self) -> None:
         if self.source_type != "video":
@@ -1242,6 +1401,14 @@ class MainWindow(QMainWindow):
             self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=self.bucket_panel.current_index())
         self.statusBar().showMessage("Applied video output settings to the existing video tiles.")
+
+    def _tile_processing_changed(self, settings: AppSettings) -> None:
+        if self.source_type == "video":
+            return
+        self._image_settings = settings
+        self.model.settings = settings
+        self._refresh_action_context()
+        self.statusBar().showMessage("Tile processing settings updated for new image tiles.")
 
     def _sync_video_resize_project_data(self) -> None:
         document = self._active_video_document()
@@ -1316,6 +1483,9 @@ class MainWindow(QMainWindow):
                 f"The selection contains {len(tile_rects)} tiles, but the final tilesheet has "
                 f"{available_slots} empty slot(s). Increase rows or columns before adding more.",
             )
+            return
+
+        if self._try_add_image_tiles_with_selected_engine(tile_rects, "selection"):
             return
 
         try:
@@ -1501,6 +1671,13 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if self._try_add_image_tiles_with_selected_engine(
+            new_rects,
+            description,
+            clear_selection_on_success=clear_selection_on_success,
+        ):
+            return
+
         try:
             before = clone_tiles(self.model.tiles)
             added_tiles = self.model.add_tiles_from_rects(self.source_image, new_rects)
@@ -1529,6 +1706,9 @@ class MainWindow(QMainWindow):
 
         if self._bucket_is_full():
             self._show_bucket_full_warning()
+            return
+
+        if self._try_add_image_tiles_with_selected_engine([rect], "grid tile"):
             return
 
         before = clone_tiles(self.model.tiles)
@@ -2117,6 +2297,7 @@ class MainWindow(QMainWindow):
         if index is None or not 0 <= index < len(self.model.tiles):
             return
         self.source_viewer.refresh_image(pil_to_qimage(self.model.tiles[index].image_rgba))
+
     def _refresh_action_context(self) -> None:
         capacity = sheet_capacity(self.model.settings)
         self.settings_panel.set_action_context(
@@ -2190,6 +2371,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{tool} | {mouse} | {selection} | {zoom}{frame}{grid}{hint}")
 
     def closeEvent(self, event) -> None:
+        if self._source_job is not None:
+            self._source_job.cancel()
+        if self._tile_job is not None:
+            self._tile_job.cancel()
         for document in self.video_documents:
             document.browser.cancel_extraction()
+        self._close_optional_engines()
         super().closeEvent(event)
