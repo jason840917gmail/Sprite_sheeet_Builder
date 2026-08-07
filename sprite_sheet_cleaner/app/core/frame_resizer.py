@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PIL import Image
 
+from sprite_sheet_cleaner.app.core.alpha_ops import resize_premultiplied
 from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
 
 
@@ -12,7 +13,7 @@ def resize_frame(image: Image.Image, settings: FrameResizeSettings) -> Image.Ima
     target = (settings.target_width, settings.target_height)
 
     if settings.mode == "stretch":
-        return rgba.resize(target, Image.Resampling.LANCZOS)
+        return resize_premultiplied(rgba, target)
 
     width, height = rgba.size
     if width <= 0 or height <= 0:
@@ -23,16 +24,16 @@ def resize_frame(image: Image.Image, settings: FrameResizeSettings) -> Image.Ima
     else:  # fill: preserve aspect ratio, then crop the overflow.
         scale = max(settings.target_width / width, settings.target_height / height)
 
-    resized = rgba.resize(
+    resized = resize_premultiplied(
+        rgba,
         (max(1, round(width * scale)), max(1, round(height * scale))),
-        Image.Resampling.LANCZOS,
     )
 
     if settings.mode == "fit":
         canvas = Image.new("RGBA", target, (0, 0, 0, 0))
         x = (settings.target_width - resized.width) // 2
         y = (settings.target_height - resized.height) // 2
-        canvas.paste(resized, (x, y), resized)
+        canvas.paste(resized, (x, y))
         return canvas
 
     left = max(0, (resized.width - settings.target_width) // 2)

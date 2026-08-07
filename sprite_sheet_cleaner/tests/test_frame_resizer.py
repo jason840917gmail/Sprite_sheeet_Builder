@@ -31,6 +31,15 @@ class FrameResizerTests(unittest.TestCase):
         self.assertEqual(result.size, (64, 64))
         self.assertEqual(result.getpixel((0, 0))[3], 255)
 
+    def test_fit_preserves_existing_semitransparent_alpha(self) -> None:
+        image = Image.new("RGBA", (1, 1), (100, 50, 25, 128))
+
+        result = resize_frame(image, FrameResizeSettings(2, 2, "fit"))
+
+        pixel = result.getpixel((0, 0))
+        self.assertEqual(pixel[3], 128)
+        self.assertLessEqual(max(abs(pixel[index] - image.getpixel((0, 0))[index]) for index in range(3)), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ from PIL import Image
 
 from sprite_sheet_cleaner.app.engines.base import MatteResult
 from sprite_sheet_cleaner.app.engines.exact_key import ExactKeyEngine
+from sprite_sheet_cleaner.app.engines.smart_solid import SmartSolidEngine
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.models.source_processing_settings import SourceProcessingSettings
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
@@ -67,6 +68,22 @@ class SourceProcessingServiceTests(unittest.TestCase):
         self.assertEqual(tile.size, (4, 4))
         self.assertEqual(tile.getpixel((2, 2))[3], 255)
         self.assertEqual(tile.getpixel((0, 0))[3], 0)
+
+    def test_process_frame_uses_shared_smart_solid_and_preserves_source_alpha(self) -> None:
+        source = Image.new("RGBA", (5, 5), (255, 0, 255, 255))
+        source.putpixel((2, 2), (20, 40, 60, 128))
+        service = SourceProcessingService(SourceRepository(), {"smart_solid": SmartSolidEngine()})
+        settings = SourceProcessingSettings(
+            engine="smart_solid",
+            background_color=(255, 0, 255),
+            transparent_threshold=2,
+            foreground_threshold=20,
+        )
+
+        result = service.process_frame(source, settings)
+
+        self.assertEqual(result.getpixel((0, 0))[3], 0)
+        self.assertEqual(result.getpixel((2, 2)), (20, 40, 60, 128))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from sprite_sheet_cleaner.app.models.source_processing_settings import (
+    BackgroundEngineId,
+    ComputePreference,
+    SourceProcessingSettings,
+)
+
 
 VideoResizeMode = Literal["fit", "stretch", "fill"]
 VideoAnchor = Literal["center", "bottom-center"]
@@ -27,8 +33,15 @@ class VideoSettings:
     lock_frame_aspect: bool = True
     resize_mode: VideoResizeMode = "fit"
     remove_background: bool = True
+    engine: BackgroundEngineId = "exact_key"
     background_color: tuple[int, int, int] = (255, 0, 255)
     tolerance: int = 30
+    transparent_threshold: int = 24
+    foreground_threshold: int = 64
+    despill_strength: int = 0
+    pixel_art_mode: bool = False
+    compute: ComputePreference = "auto"
+    model_id: str | None = None
     trim_transparent: bool = False
     anchor: VideoAnchor = "center"
     sheet_columns: int = 8
@@ -64,7 +77,22 @@ class VideoSettings:
             raise ValueError("Video sheet dimensions must be positive.")
         if self.seed_frame_count <= 0:
             raise ValueError("Seed animation frame count must be positive.")
+        self.to_source_processing_settings().validated()
         return self
+
+    def to_source_processing_settings(self) -> SourceProcessingSettings:
+        return SourceProcessingSettings(
+            engine=self.engine,
+            remove_background=self.remove_background,
+            background_color=self.background_color,
+            tolerance=self.tolerance,
+            transparent_threshold=self.transparent_threshold,
+            foreground_threshold=self.foreground_threshold,
+            despill_strength=self.despill_strength,
+            pixel_art_mode=self.pixel_art_mode,
+            compute=self.compute,
+            model_id=self.model_id,
+        ).validated()
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -106,8 +134,15 @@ class VideoSettings:
             lock_frame_aspect=bool(values.get("lock_frame_aspect", True)),
             resize_mode=str(values.get("resize_mode", "fit")),
             remove_background=bool(values.get("remove_background", True)),
+            engine=str(values.get("engine", "exact_key")),
             background_color=values.get("background_color", (255, 0, 255)),
             tolerance=int(values.get("tolerance", 30)),
+            transparent_threshold=int(values.get("transparent_threshold", 24)),
+            foreground_threshold=int(values.get("foreground_threshold", 64)),
+            despill_strength=int(values.get("despill_strength", 0)),
+            pixel_art_mode=bool(values.get("pixel_art_mode", False)),
+            compute=str(values.get("compute", "auto")),
+            model_id=str(values["model_id"]) if values.get("model_id") else None,
             trim_transparent=bool(values.get("trim_transparent", False)),
             anchor=str(values.get("anchor", "center")),
             sheet_columns=int(values.get("sheet_columns", 8)),

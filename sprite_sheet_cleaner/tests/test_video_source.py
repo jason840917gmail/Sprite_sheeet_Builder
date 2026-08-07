@@ -54,7 +54,11 @@ class VideoSourceTests(unittest.TestCase):
             frame_height=96,
             resize_mode="fit",
             remove_background=True,
+            engine="smart_solid",
             background_color=(10, 20, 30),
+            transparent_threshold=18,
+            foreground_threshold=72,
+            compute="cpu",
             sheet_columns=6,
             sheet_rows=4,
         )
@@ -64,6 +68,9 @@ class VideoSourceTests(unittest.TestCase):
         self.assertEqual(restored.start_frame, 4)
         self.assertEqual((restored.frame_width, restored.frame_height), (64, 96))
         self.assertEqual(restored.background_color, (10, 20, 30))
+        self.assertEqual(restored.engine, "smart_solid")
+        self.assertEqual((restored.transparent_threshold, restored.foreground_threshold), (18, 72))
+        self.assertEqual(restored.compute, "cpu")
         self.assertEqual((restored.sheet_columns, restored.sheet_rows), (6, 4))
 
 

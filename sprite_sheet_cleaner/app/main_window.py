@@ -383,6 +383,8 @@ class MainWindow(QMainWindow):
         self._close_optional_engines()
         self.source_background_panel.set_engine_available("rembg", False)
         self.source_background_panel.set_engine_available("ben2", False)
+        self.video_settings_panel.set_engine_available("rembg", False)
+        self.video_settings_panel.set_engine_available("ben2", False)
         self.settings_panel.set_tile_engine_available("rembg", False)
         engines = {"exact_key": ExactKeyEngine(), "smart_solid": SmartSolidEngine()}
         for manifest in self.runtime_registry.manifests():
@@ -403,6 +405,7 @@ class MainWindow(QMainWindow):
             )
             engines[provider_id] = engine
             self.source_background_panel.set_engine_available(provider_id, True)
+            self.video_settings_panel.set_engine_available(provider_id, True)
             if provider_id == "rembg":
                 self.settings_panel.set_tile_engine_available("rembg", True)
         self.source_processing_service.engines = engines
@@ -474,7 +477,10 @@ class MainWindow(QMainWindow):
             sheet_columns=video.sheet_columns,
             sheet_rows=video.sheet_rows,
             match_sheet_to_grid=False,
-            remove_background=video.remove_background,
+            # Video frames are processed through the shared background engine
+            # before entering the tile-normalization pipeline.
+            remove_background=False,
+            tile_background_engine=video.engine,
             background_color=video.background_color,
             tolerance=video.tolerance,
             trim_transparent=video.trim_transparent,
@@ -1197,8 +1203,15 @@ class MainWindow(QMainWindow):
             document.settings.lock_frame_aspect = settings.lock_frame_aspect
             document.settings.resize_mode = settings.resize_mode
             document.settings.remove_background = settings.remove_background
+            document.settings.engine = settings.engine
+            document.settings.compute = settings.compute
             document.settings.background_color = settings.background_color
             document.settings.tolerance = settings.tolerance
+            document.settings.transparent_threshold = settings.transparent_threshold
+            document.settings.foreground_threshold = settings.foreground_threshold
+            document.settings.despill_strength = settings.despill_strength
+            document.settings.pixel_art_mode = settings.pixel_art_mode
+            document.settings.model_id = settings.model_id
             document.settings.trim_transparent = settings.trim_transparent
             document.settings.anchor = settings.anchor
             document.settings.sheet_columns = settings.sheet_columns
@@ -1392,6 +1405,7 @@ class MainWindow(QMainWindow):
             self.model.reprocess_video_tiles(
                 self._read_video_frame,
                 self._read_video_frame_for_source,
+                self._process_video_frame_for_tile,
             )
         except Exception as exc:
             self.model.tiles = before
@@ -1401,6 +1415,36 @@ class MainWindow(QMainWindow):
             self._record_bucket_snapshot(before)
         self._refresh_all(selected_index=self.bucket_panel.current_index())
         self.statusBar().showMessage("Applied video output settings to the existing video tiles.")
+
+    def _video_document_for_path(self, source_path: str | None) -> VideoDocument | None:
+        if not source_path:
+            return self._active_video_document()
+        candidate = Path(source_path)
+        for document in self.video_documents:
+            if document.path.resolve() == candidate.resolve():
+                return document
+        return None
+
+    def _process_video_frame_for_tile(self, frame: Image.Image, tile: object) -> Image.Image:
+        document = self._video_document_for_path(getattr(tile, "source_path", None))
+        if document is None:
+            return frame.convert("RGBA")
+        return self.source_processing_service.process_frame(
+            frame,
+            document.settings.to_source_processing_settings(),
+        )
+
+    def _process_video_frames(
+        self,
+        frames: list[tuple[FrameRef, Image.Image]],
+        document: VideoDocument,
+    ) -> list[tuple[FrameRef, Image.Image]]:
+        """Apply one stable processing recipe to the selected frame sequence."""
+        settings = document.settings.to_source_processing_settings()
+        return [
+            (ref, self.source_processing_service.process_frame(frame, settings))
+            for ref, frame in frames
+        ]
 
     def _tile_processing_changed(self, settings: AppSettings) -> None:
         if self.source_type == "video":
@@ -1576,6 +1620,7 @@ class MainWindow(QMainWindow):
                 frames = list(source.read_frames(new_refs))
             if not frames:
                 return
+            frames = self._process_video_frames(frames, document)
             crop_rect = (0, 0, frames[0][1].width, frames[0][1].height)
             for ref in new_refs:
                 document.resize_settings[ref.index] = resize_settings

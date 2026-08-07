@@ -151,6 +151,7 @@ class CloneSamplingAndPanelTests(unittest.TestCase):
             source.putpixel((1, 1), (12, 34, 56, 255))
             source.putpixel((2, 2), (90, 80, 70, 255))
             window.source_image = source
+            window.source_repository.open_original(source)
             window.source_viewer.set_image(pil_to_qimage(source))
             window._set_viewer_tool("retouch")
             window.retouch_panel.mode.setCurrentIndex(2)

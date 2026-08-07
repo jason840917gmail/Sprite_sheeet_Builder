@@ -194,6 +194,7 @@ class ProjectModel:
         self,
         frame_provider: Callable[[int], Image.Image],
         source_frame_provider: Callable[[str | None, int], Image.Image] | None = None,
+        frame_processor: Callable[[Image.Image, TileItem], Image.Image] | None = None,
     ) -> None:
         rebuilt: list[TileItem] = []
         for tile in self.tiles:
@@ -204,6 +205,8 @@ class ProjectModel:
                 frame = source_frame_provider(tile.source_path, tile.source_frame_index)
             else:
                 frame = frame_provider(tile.source_frame_index)
+            if frame_processor is not None:
+                frame = frame_processor(frame, tile)
             crop_rect = clamp_crop_rect(frame, tile.source_rect)
             resize_settings = None
             if tile.resize_size is not None and tile.resize_mode is not None:

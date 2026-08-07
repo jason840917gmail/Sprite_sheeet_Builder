@@ -188,15 +188,21 @@ Updated: 2026-08-05
 - Added verified optional runtime manifests and a Model Manager for rembg/U2Net
   and BEN2 Base ONNX. Weights live in user data and are verified by SHA-256;
   the repository contains no model files.
+- Video frames now use the shared Exact Key/Smart Solid/optional AI background
+  engine seam before tile normalization, with stable per-video processing
+  settings persisted alongside video output settings.
+- Video Fit, Stretch, and Fill resizing now use premultiplied-alpha scaling;
+  transparent padding is copied without multiplying existing alpha a second
+  time.
 - Added an isolated JSON-line AI worker, ONNX provider discovery, NVIDIA
   capability probing, CUDA warm-up, and visible Auto CPU fallback.
 - Added atomic export validation, cache indexing/protected entries, sanitized
   diagnostics, and stable error categories.
 
-## Verification (2026-08-05)
+## Verification (2026-08-06)
 
-- Bundled Python: `118` unit tests passed, `19` expected Qt tests skipped because
-  the bundled runtime does not include PySide6.
+- Project `.venv`: `138` tests passed with PySide6 available; three existing Qt
+  deprecation warnings remain.
 - `python -m compileall -q sprite_sheet_cleaner`: passed.
 - `git diff --check`: passed.
 

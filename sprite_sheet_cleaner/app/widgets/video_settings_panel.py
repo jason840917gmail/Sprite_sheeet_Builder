@@ -45,6 +45,17 @@ class VideoSettingsPanel(QWidget):
         self.resize_mode.addItem("Fit (preserve aspect)", "fit")
         self.resize_mode.addItem("Stretch (exact dimensions)", "stretch")
         self.resize_mode.addItem("Fill / crop", "fill")
+        self.engine = QComboBox()
+        self.engine.addItem("Exact Key", "exact_key")
+        self.engine.addItem("Smart Solid", "smart_solid")
+        self.engine.addItem("rembg (install model)", "rembg")
+        self.engine.addItem("BEN2 (install model)", "ben2")
+        for index in (2, 3):
+            self.engine.model().item(index).setEnabled(False)
+        self.compute = QComboBox()
+        self.compute.addItem("Auto (CUDA, then CPU)", "auto")
+        self.compute.addItem("NVIDIA CUDA only", "cuda")
+        self.compute.addItem("CPU only", "cpu")
         self.remove_background = QCheckBox()
         self.remove_background.setChecked(True)
         self.color_button = QPushButton()
@@ -56,6 +67,18 @@ class VideoSettingsPanel(QWidget):
         self.tolerance_spin = self._spin(0, 255, 30)
         self.tolerance_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.tolerance_spin.setMaximumWidth(72)
+        self.transparent_threshold_slider = QSlider(Qt.Horizontal)
+        self.transparent_threshold_slider.setRange(0, 255)
+        self.transparent_threshold_slider.setValue(24)
+        self.transparent_threshold_spin = self._spin(0, 255, 24)
+        self.transparent_threshold_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.transparent_threshold_spin.setMaximumWidth(72)
+        self.foreground_threshold_slider = QSlider(Qt.Horizontal)
+        self.foreground_threshold_slider.setRange(1, 255)
+        self.foreground_threshold_slider.setValue(64)
+        self.foreground_threshold_spin = self._spin(1, 255, 64)
+        self.foreground_threshold_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.foreground_threshold_spin.setMaximumWidth(72)
         self.trim_transparent = QCheckBox()
         self.anchor = QComboBox()
         self.anchor.addItem("Center", "center")
@@ -80,6 +103,15 @@ class VideoSettingsPanel(QWidget):
         tolerance_row.addWidget(self.tolerance_slider, 1)
         tolerance_row.addWidget(self.tolerance_spin)
 
+        transparent_threshold_row = self._slider_row(
+            self.transparent_threshold_slider,
+            self.transparent_threshold_spin,
+        )
+        foreground_threshold_row = self._slider_row(
+            self.foreground_threshold_slider,
+            self.foreground_threshold_spin,
+        )
+
         color_row = QHBoxLayout()
         color_row.setContentsMargins(0, 0, 0, 0)
         color_row.setSpacing(6)
@@ -102,9 +134,13 @@ class VideoSettingsPanel(QWidget):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.addRow("Frame output size", frame_size_row)
         form.addRow("Resize mode", self.resize_mode)
+        form.addRow("Background engine", self.engine)
+        form.addRow("Compute", self.compute)
         form.addRow("Remove background", self.remove_background)
         form.addRow("Background color", color_row)
         form.addRow("Tolerance", tolerance_row)
+        form.addRow("Transparent threshold", transparent_threshold_row)
+        form.addRow("Foreground threshold", foreground_threshold_row)
         form.addRow("Trim transparent", self.trim_transparent)
         form.addRow("Anchor", self.anchor)
         form.addRow("Seed animation frames", self.seed_frame_count)
@@ -136,8 +172,11 @@ class VideoSettingsPanel(QWidget):
             lock_frame_aspect=self.lock_frame_aspect.isChecked(),
             resize_mode=self.resize_mode.currentData(),
             remove_background=self.remove_background.isChecked(),
+            engine=self.engine.currentData(),
             background_color=self._background_color,
             tolerance=self.tolerance_spin.value(),
+            transparent_threshold=self.transparent_threshold_spin.value(),
+            foreground_threshold=self.foreground_threshold_spin.value(),
             trim_transparent=self.trim_transparent.isChecked(),
             anchor=self.anchor.currentData(),
             sheet_columns=self.sheet_columns.value(),
@@ -153,10 +192,18 @@ class VideoSettingsPanel(QWidget):
         self.lock_frame_aspect.setChecked(settings.lock_frame_aspect)
         resize_index = self.resize_mode.findData(settings.resize_mode)
         self.resize_mode.setCurrentIndex(max(resize_index, 0))
+        engine_index = self.engine.findData(settings.engine)
+        self.engine.setCurrentIndex(max(engine_index, 0))
+        compute_index = self.compute.findData(settings.compute)
+        self.compute.setCurrentIndex(max(compute_index, 0))
         self.remove_background.setChecked(settings.remove_background)
         self._background_color = settings.background_color
         self.tolerance_slider.setValue(settings.tolerance)
         self.tolerance_spin.setValue(settings.tolerance)
+        self.transparent_threshold_slider.setValue(settings.transparent_threshold)
+        self.transparent_threshold_spin.setValue(settings.transparent_threshold)
+        self.foreground_threshold_slider.setValue(settings.foreground_threshold)
+        self.foreground_threshold_spin.setValue(settings.foreground_threshold)
         self.trim_transparent.setChecked(settings.trim_transparent)
         anchor_index = self.anchor.findData(settings.anchor)
         self.anchor.setCurrentIndex(max(anchor_index, 0))
@@ -177,6 +224,16 @@ class VideoSettingsPanel(QWidget):
         self._updating = False
         self._emit_settings_changed()
 
+    def set_engine_available(self, engine_id: str, available: bool) -> None:
+        for index in range(self.engine.count()):
+            if self.engine.itemData(index) == engine_id:
+                item = self.engine.model().item(index)
+                if item is not None:
+                    item.setEnabled(available)
+                label = "rembg" if engine_id == "rembg" else "BEN2"
+                self.engine.setItemText(index, label if available else f"{label} (install model)")
+                return
+
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
@@ -189,6 +246,10 @@ class VideoSettingsPanel(QWidget):
         self.apply_button.clicked.connect(self.applyToBucketRequested.emit)
         self.tolerance_slider.valueChanged.connect(self.tolerance_spin.setValue)
         self.tolerance_spin.valueChanged.connect(self.tolerance_slider.setValue)
+        self.transparent_threshold_slider.valueChanged.connect(self.transparent_threshold_spin.setValue)
+        self.transparent_threshold_spin.valueChanged.connect(self.transparent_threshold_slider.setValue)
+        self.foreground_threshold_slider.valueChanged.connect(self.foreground_threshold_spin.setValue)
+        self.foreground_threshold_spin.valueChanged.connect(self.foreground_threshold_slider.setValue)
 
         for control in (
             self.frame_width,
@@ -198,11 +259,15 @@ class VideoSettingsPanel(QWidget):
             self.seed_frame_count,
             self.tolerance_slider,
             self.tolerance_spin,
+            self.transparent_threshold_slider,
+            self.transparent_threshold_spin,
+            self.foreground_threshold_slider,
+            self.foreground_threshold_spin,
         ):
             control.valueChanged.connect(self._emit_settings_changed)
         for control in (self.lock_frame_aspect, self.remove_background, self.trim_transparent):
             control.toggled.connect(self._emit_settings_changed)
-        for control in (self.resize_mode, self.anchor):
+        for control in (self.resize_mode, self.engine, self.compute, self.anchor):
             control.currentIndexChanged.connect(self._emit_settings_changed)
         self.frame_width.valueChanged.connect(lambda value: self._sync_frame_dimensions("width", value))
         self.frame_height.valueChanged.connect(lambda value: self._sync_frame_dimensions("height", value))
@@ -215,6 +280,15 @@ class VideoSettingsPanel(QWidget):
             self._background_color = (color.red(), color.green(), color.blue())
             self._update_color_button()
             self._emit_settings_changed()
+
+    def _slider_row(self, slider: QSlider, spin: QSpinBox) -> QWidget:
+        row = QWidget(self)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(slider, 1)
+        layout.addWidget(spin)
+        return row
 
     def _update_color_button(self) -> None:
         r, g, b = self._background_color

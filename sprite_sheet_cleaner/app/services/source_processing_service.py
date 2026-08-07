@@ -43,6 +43,26 @@ class SourceProcessingService:
             backend=result.backend,
         )
 
+    def process_frame(
+        self,
+        image: Image.Image,
+        settings: object,
+        *,
+        progress=None,
+        cancelled=None,
+    ) -> Image.Image:
+        """Apply one configured background engine while preserving source alpha."""
+        source = image.convert("RGBA")
+        if not bool(getattr(settings, "remove_background", True)):
+            return source.copy()
+        selected_id = str(getattr(settings, "engine", "exact_key"))
+        try:
+            engine = self.engines[selected_id]
+        except KeyError as exc:
+            raise ValueError(f"Background engine is not available: {selected_id}") from exc
+        result = engine.remove(source, settings, progress=progress, cancelled=cancelled)
+        return apply_matte(source, result)
+
     def extract_tile(
         self,
         crop_rect: tuple[int, int, int, int],
@@ -76,15 +96,12 @@ class SourceProcessingService:
             raise RuntimeError("Tile processing cancelled.")
 
         if settings.remove_background:
-            processing_settings = settings.tile_processing_settings()
-            try:
-                engine = self.engines[processing_settings.engine]
-            except KeyError as exc:
-                raise ValueError(
-                    f"Tile background engine is not available: {processing_settings.engine}"
-                ) from exc
-            result = engine.remove(crop, processing_settings, progress=progress, cancelled=cancelled)
-            crop = apply_matte(crop, result)
+            crop = self.process_frame(
+                crop,
+                settings.tile_processing_settings(),
+                progress=progress,
+                cancelled=cancelled,
+            )
 
         extraction_settings = AppSettings.from_dict(settings.to_dict())
         extraction_settings.remove_background = False
