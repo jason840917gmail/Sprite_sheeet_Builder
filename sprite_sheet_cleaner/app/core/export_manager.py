@@ -78,6 +78,8 @@ def export_metadata(
         output_path = output_path.with_suffix(".json")
 
     settings.validated()
+    bucket_width = int(settings.bucket_tile_width)
+    bucket_height = int(settings.bucket_tile_height)
     frames: list[dict[str, object]] = []
     for index, tile in enumerate(tiles):
         row = index // settings.sheet_columns
@@ -87,10 +89,10 @@ def export_metadata(
                 "index": index,
                 "name": tile.name,
                 "sheet_rect": [
-                    column * settings.tile_width,
-                    row * settings.tile_height,
-                    settings.tile_width,
-                    settings.tile_height,
+                    column * bucket_width,
+                    row * bucket_height,
+                    bucket_width,
+                    bucket_height,
                 ],
                 "source_rect": list(tile.source_rect),
                 "source_type": tile.source_type,
@@ -109,8 +111,8 @@ def export_metadata(
         "video_sources": video_sources,
         "animation_fps": animation_fps,
         "sheet": {
-            "tile_width": settings.tile_width,
-            "tile_height": settings.tile_height,
+            "tile_width": bucket_width,
+            "tile_height": bucket_height,
             "columns": settings.sheet_columns,
             "rows": settings.sheet_rows,
         },

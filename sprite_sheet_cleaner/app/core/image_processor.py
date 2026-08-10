@@ -7,6 +7,9 @@ from sprite_sheet_cleaner.app.core.alpha_ops import dilate_transparent_rgb, resi
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
 from sprite_sheet_cleaner.app.core.frame_resizer import resize_frame
+from sprite_sheet_cleaner.app.core.bucket_renderer import prepare_bucket_base
+from sprite_sheet_cleaner.app.core.tile_transform import render_tile_transform
+from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
 
 
 CropRect = tuple[int, int, int, int]
@@ -115,8 +118,25 @@ def process_crop(
     if settings.trim_transparent:
         crop = trim_transparent_edges(crop)
 
-    crop = scale_to_settings(crop, settings)
-    return place_on_tile_canvas(crop, settings)
+    base = prepare_bucket_base(crop, settings.bucket_settings())
+    return render_tile_transform(base, settings.bucket_settings(), TileTransform())
+
+
+def process_crop_to_bucket(
+    source_image: Image.Image,
+    crop_rect: CropRect,
+    settings: AppSettings,
+) -> tuple[Image.Image, Image.Image]:
+    """Return the editable bucket base and its rendered identity-transform image."""
+    settings.validated()
+    crop = crop_source_image(source_image, crop_rect)
+    if settings.remove_background:
+        crop = remove_background_color(crop, settings.background_color, settings.tolerance)
+    if settings.trim_transparent:
+        crop = trim_transparent_edges(crop)
+    bucket = settings.bucket_settings()
+    base = prepare_bucket_base(crop, bucket)
+    return base, render_tile_transform(base, bucket, TileTransform())
 
 
 def process_crop_with_resize(
@@ -138,5 +158,24 @@ def process_crop_with_resize(
     if resize_settings is not None:
         crop = resize_frame(crop, resize_settings)
 
-    crop = scale_to_settings(crop, settings)
-    return place_on_tile_canvas(crop, settings)
+    base = prepare_bucket_base(crop, settings.bucket_settings())
+    return render_tile_transform(base, settings.bucket_settings(), TileTransform())
+
+
+def process_crop_with_resize_to_bucket(
+    source_image: Image.Image,
+    crop_rect: CropRect,
+    settings: AppSettings,
+    resize_settings: FrameResizeSettings | None = None,
+) -> tuple[Image.Image, Image.Image]:
+    settings.validated()
+    crop = crop_source_image(source_image, crop_rect)
+    if settings.remove_background:
+        crop = remove_background_color(crop, settings.background_color, settings.tolerance)
+    if settings.trim_transparent:
+        crop = trim_transparent_edges(crop)
+    if resize_settings is not None:
+        crop = resize_frame(crop, resize_settings)
+    bucket = settings.bucket_settings()
+    base = prepare_bucket_base(crop, bucket)
+    return base, render_tile_transform(base, bucket, TileTransform())

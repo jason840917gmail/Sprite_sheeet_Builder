@@ -4,6 +4,23 @@ Updated: 2026-08-05
 
 ## Built
 
+- Added separate source-selection and bucket/output tile geometry:
+  - a source selection can remain `256 x 256` while insertion automatically normalizes it to a `64 x 64` bucket tile;
+  - Fit, Fit Down Only, Fill/Crop, Stretch, and No Scale modes;
+  - Smooth premultiplied-alpha or Nearest pixel-art resampling;
+  - final sheet dimensions, individual tile dimensions, animation frames, and metadata now use the bucket size;
+  - changing bucket dimensions resizes every existing tile atomically and is undoable;
+  - schema-v2 projects migrate to schema 3 without changing their legacy source/output dimensions.
+- Added bucket-only tile transforms:
+  - Rotate toolbar action and `R` shortcut;
+  - four corner handles, center rotation ring, movable pivot, fixed canvas boundary, live angle, and clipping warning;
+  - Shift snapping in 15-degree increments;
+  - numeric X/Y scale, angle, pivot, resampling, quick rotations, resets, Fit Content, Fill Canvas, and Fit Rotated controls;
+  - staged preview with Enter/Apply and Esc/Cancel;
+  - one undo step per committed transform, deterministic previews from an unchanged editable base, and alpha-safe rotation;
+  - transform/base persistence in `.sscproj`, including video metadata preservation;
+  - committed transforms bake predictably before bucket Paint Cleanup.
+
 - Added the first video-to-spritesheet implementation slice:
   - Open Video action for common video formats.
   - OpenCV-backed video metadata and frame decoding adapter.
@@ -201,14 +218,16 @@ Updated: 2026-08-05
 
 ## Verification (2026-08-06)
 
-- Project `.venv`: `138` tests passed with PySide6 available; three existing Qt
+- Bucket resize/rotation implementation: `166` tests passed with PySide6 available; three existing Qt
+  deprecation warnings remain.
+- Offscreen visual smoke check confirmed the Rotate panel, corner handles, center ring, pivot, clipping outline, tile thumbnail, and `64 x 64` bucket preview render together.
+- Project `.venv`: `138` earlier tests passed with PySide6 available; three existing Qt
   deprecation warnings remain.
 - `python -m compileall -q sprite_sheet_cleaner`: passed.
 - `git diff --check`: passed.
 
 ## Remaining release gates
 
-- Run the Qt suite in a supported environment with PySide6 installed.
 - On an NVIDIA machine, install both optional runtimes through Model Manager,
   verify the real provider/session warm-up, and measure RAM/VRAM and quality on
   the project corpus.

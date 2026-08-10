@@ -34,6 +34,24 @@ class SettingsModelTests(unittest.TestCase):
         self.assertIsInstance(sheet, SheetSettings)
         self.assertEqual((sheet.sheet_columns, sheet.sheet_rows), (3, 2))
 
+    def test_bucket_geometry_defaults_to_legacy_tile_geometry(self) -> None:
+        settings = AppSettings(tile_width=64, tile_height=96).validated()
+
+        self.assertEqual((settings.bucket_tile_width, settings.bucket_tile_height), (64, 96))
+        self.assertEqual((settings.bucket_settings().tile_width, settings.bucket_settings().tile_height), (64, 96))
+
+    def test_explicit_bucket_geometry_is_independent(self) -> None:
+        settings = AppSettings(
+            tile_width=256,
+            tile_height=256,
+            bucket_tile_width=64,
+            bucket_tile_height=32,
+            bucket_resize_mode="fit",
+        ).validated()
+
+        self.assertEqual((settings.tile_width, settings.tile_height), (256, 256))
+        self.assertEqual((settings.bucket_tile_width, settings.bucket_tile_height), (64, 32))
+
     def test_scoped_settings_validate_threshold_order(self) -> None:
         with self.assertRaises(ValueError):
             SourceProcessingSettings(transparent_threshold=80, foreground_threshold=20).validated()

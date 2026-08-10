@@ -22,6 +22,7 @@ from sprite_sheet_cleaner.app.storage.project_schema import (
     SCHEMA_VERSION,
     validate_entry_name,
 )
+from sprite_sheet_cleaner.app.storage.project_migrations import migrate_project_data
 
 
 @dataclass(slots=True)
@@ -110,8 +111,10 @@ def load_project_archive(path: str | Path) -> LoadedProjectArchive:
         data = json.loads(manifest_bytes.decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError("Project manifest must be an object.")
-        if int(data.get("schema_version", 0)) != SCHEMA_VERSION:
+        source_version = int(data.get("schema_version", 0))
+        if source_version not in {2, SCHEMA_VERSION}:
             raise ValueError(f"Unsupported project schema: {data.get('schema_version')}")
+        data = migrate_project_data(data)
         tile_refs = data.get("tiles", [])
         if not isinstance(tile_refs, list):
             raise ValueError("Project tiles must be a list.")

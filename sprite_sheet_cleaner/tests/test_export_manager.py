@@ -31,15 +31,18 @@ class ExportManagerTests(unittest.TestCase):
 
     def test_export_metadata_contains_sheet_and_video_frame_coordinates(self) -> None:
         settings = AppSettings(
-            tile_width=16,
-            tile_height=16,
+            tile_width=256,
+            tile_height=256,
+            bucket_tile_width=64,
+            bucket_tile_height=64,
+            bucket_resize_mode="fit",
             sheet_columns=2,
             sheet_rows=1,
             remove_background=False,
         )
         model = ProjectModel(settings=settings)
         model.add_video_frames(
-            [(FrameRef(12, 400), Image.new("RGBA", (16, 16), (255, 0, 0, 255)))],
+            [(FrameRef(12, 400), Image.new("RGBA", (256, 256), (255, 0, 0, 255)))],
             source_path="clip.mp4",
         )
 
@@ -54,9 +57,9 @@ class ExportManagerTests(unittest.TestCase):
             )
             data = json.loads(output.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["sheet"], {"tile_width": 16, "tile_height": 16, "columns": 2, "rows": 1})
+        self.assertEqual(data["sheet"], {"tile_width": 64, "tile_height": 64, "columns": 2, "rows": 1})
         self.assertEqual(data["animation_fps"], 12.0)
-        self.assertEqual(data["frames"][0]["sheet_rect"], [0, 0, 16, 16])
+        self.assertEqual(data["frames"][0]["sheet_rect"], [0, 0, 64, 64])
         self.assertEqual(data["frames"][0]["source_path"], "clip.mp4")
         self.assertEqual(data["frames"][0]["source_frame_index"], 12)
         self.assertEqual(data["frames"][0]["source_timestamp_ms"], 400)

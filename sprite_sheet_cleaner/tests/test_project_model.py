@@ -48,13 +48,36 @@ class ProjectModelTests(unittest.TestCase):
         model = ProjectModel(settings=AppSettings(tile_width=2, tile_height=2, remove_background=False))
 
         with patch(
-            "sprite_sheet_cleaner.app.core.project_model.process_crop",
-            side_effect=[Image.new("RGBA", (2, 2)), RuntimeError("processing failed")],
+            "sprite_sheet_cleaner.app.core.project_model.process_crop_to_bucket",
+            side_effect=[
+                (Image.new("RGBA", (2, 2)), Image.new("RGBA", (2, 2))),
+                RuntimeError("processing failed"),
+            ],
         ):
             with self.assertRaisesRegex(RuntimeError, "processing failed"):
                 model.add_tiles_from_rects(source, [(0, 0, 2, 2), (2, 0, 2, 2)])
 
         self.assertEqual(model.tiles, [])
+
+    def test_selection_size_is_independent_from_bucket_output_size(self) -> None:
+        source = Image.new("RGBA", (256, 256), (25, 50, 75, 255))
+        model = ProjectModel(
+            settings=AppSettings(
+                tile_width=256,
+                tile_height=256,
+                bucket_tile_width=64,
+                bucket_tile_height=64,
+                bucket_resize_mode="fit",
+                remove_background=False,
+                edge_bleed=0,
+            )
+        )
+
+        tile = model.add_tile_from_crop(source, (0, 0, 256, 256))
+
+        self.assertEqual(tile.source_size, (256, 256))
+        self.assertEqual(tile.final_size, (64, 64))
+        self.assertEqual(tile.image_rgba.size, (64, 64))
 
     def test_legacy_true_match_setting_migrates_without_using_selection_dimensions(self) -> None:
         settings = AppSettings.from_dict(

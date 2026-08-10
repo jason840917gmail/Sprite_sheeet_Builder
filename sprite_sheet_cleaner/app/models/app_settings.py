@@ -4,6 +4,13 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 from sprite_sheet_cleaner.app.models.sheet_settings import SheetSettings
+from sprite_sheet_cleaner.app.models.bucket_settings import (
+    BucketResizeMode,
+    BucketResampleMode,
+    BucketSettings,
+    VALID_BUCKET_RESAMPLE_MODES,
+    VALID_BUCKET_RESIZE_MODES,
+)
 from sprite_sheet_cleaner.app.models.source_processing_settings import BackgroundEngineId, SourceProcessingSettings
 from sprite_sheet_cleaner.app.models.tile_settings import TileSettings
 
@@ -20,6 +27,11 @@ class AppSettings:
     tile_width: int = 256
     tile_height: int = 256
     lock_tile_aspect: bool = True
+    bucket_tile_width: int | None = None
+    bucket_tile_height: int | None = None
+    lock_bucket_aspect: bool = True
+    bucket_resize_mode: BucketResizeMode | None = None
+    bucket_resample_mode: BucketResampleMode = "smooth"
     selection_columns: int = 1
     selection_rows: int = 1
     sheet_columns: int = 8
@@ -37,7 +49,25 @@ class AppSettings:
 
     def validated(self) -> "AppSettings":
         if self.tile_width <= 0 or self.tile_height <= 0:
-            raise ValueError("Tile dimensions must be positive.")
+            raise ValueError("Source selection dimensions must be positive.")
+        if self.scale_mode not in VALID_SCALE_MODES:
+            raise ValueError(f"Unsupported scale mode: {self.scale_mode}")
+        if self.bucket_tile_width is None:
+            self.bucket_tile_width = self.tile_width
+        if self.bucket_tile_height is None:
+            self.bucket_tile_height = self.tile_height
+        if self.bucket_resize_mode is None:
+            self.bucket_resize_mode = {
+                "none": "none",
+                "scale_down_only": "fit_down_only",
+                "scale_to_fit": "fit",
+            }[self.scale_mode]
+        if self.bucket_tile_width <= 0 or self.bucket_tile_height <= 0:
+            raise ValueError("Bucket tile dimensions must be positive.")
+        if self.bucket_resize_mode not in VALID_BUCKET_RESIZE_MODES:
+            raise ValueError(f"Unsupported bucket resize mode: {self.bucket_resize_mode}")
+        if self.bucket_resample_mode not in VALID_BUCKET_RESAMPLE_MODES:
+            raise ValueError(f"Unsupported bucket resampling mode: {self.bucket_resample_mode}")
         if self.selection_columns <= 0 or self.selection_rows <= 0:
             raise ValueError("Selection grid dimensions must be positive.")
         if self.sheet_columns <= 0 or self.sheet_rows <= 0:
@@ -50,8 +80,6 @@ class AppSettings:
             raise ValueError("Tolerance cannot be negative.")
         if self.tile_background_engine not in {"exact_key", "smart_solid", "rembg", "ben2"}:
             raise ValueError(f"Unsupported tile background engine: {self.tile_background_engine}")
-        if self.scale_mode not in VALID_SCALE_MODES:
-            raise ValueError(f"Unsupported scale mode: {self.scale_mode}")
         if self.anchor not in VALID_ANCHORS:
             raise ValueError(f"Unsupported anchor: {self.anchor}")
         if len(self.background_color) != 3:
@@ -61,6 +89,7 @@ class AppSettings:
         return self
 
     def to_dict(self) -> dict[str, object]:
+        self.validated()
         data = asdict(self)
         data["background_color"] = list(self.background_color)
         return data
@@ -93,6 +122,19 @@ class AppSettings:
             scale_mode=self.scale_mode,
             padding=self.padding,
             anchor=self.anchor,
+        ).validated()
+
+    def bucket_settings(self) -> BucketSettings:
+        self.validated()
+        return BucketSettings(
+            tile_width=int(self.bucket_tile_width),
+            tile_height=int(self.bucket_tile_height),
+            lock_aspect=self.lock_bucket_aspect,
+            resize_mode=self.bucket_resize_mode,
+            resample_mode=self.bucket_resample_mode,
+            padding=self.padding,
+            anchor=self.anchor,
+            edge_bleed=self.edge_bleed,
         ).validated()
 
     def sheet_settings(self) -> SheetSettings:

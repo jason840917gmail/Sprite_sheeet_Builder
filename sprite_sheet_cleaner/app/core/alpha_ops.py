@@ -4,10 +4,19 @@ from PIL import Image
 import numpy as np
 
 
-def resize_premultiplied(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+def resize_premultiplied(
+    image: Image.Image,
+    size: tuple[int, int],
+    resample_mode: str = "smooth",
+) -> Image.Image:
     """Resize straight-alpha RGBA without pulling hidden RGB into edges."""
     if size[0] <= 0 or size[1] <= 0:
         raise ValueError("Resize dimensions must be positive.")
+
+    if resample_mode not in {"nearest", "smooth"}:
+        raise ValueError(f"Unsupported resampling mode: {resample_mode}")
+    if resample_mode == "nearest":
+        return image.convert("RGBA").resize(size, Image.Resampling.NEAREST)
 
     rgba = np.asarray(image.convert("RGBA"), dtype=np.float32)
     alpha = rgba[:, :, 3:4] / 255.0
@@ -23,6 +32,42 @@ def resize_premultiplied(image: Image.Image, size: tuple[int, int]) -> Image.Ima
     visible = resized_alpha[:, :, 0] > 0
     rgb[visible] = resized[:, :, :3][visible] * 255.0 / resized_alpha[visible]
     output = np.concatenate((np.clip(np.rint(rgb), 0, 255), resized_alpha), axis=2).astype(np.uint8)
+    return Image.fromarray(output, "RGBA")
+
+
+def transform_premultiplied(
+    image: Image.Image,
+    size: tuple[int, int],
+    affine: tuple[float, float, float, float, float, float],
+    resample_mode: str = "smooth",
+) -> Image.Image:
+    """Apply a Pillow inverse affine transform without introducing alpha-edge halos."""
+    if size[0] <= 0 or size[1] <= 0:
+        raise ValueError("Transform dimensions must be positive.")
+    if resample_mode not in {"nearest", "smooth"}:
+        raise ValueError(f"Unsupported resampling mode: {resample_mode}")
+
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.float32)
+    alpha = rgba[:, :, 3:4] / 255.0
+    premultiplied = np.rint(rgba[:, :, :3] * alpha).astype(np.uint8)
+    packed = np.concatenate((premultiplied, rgba[:, :, 3:4].astype(np.uint8)), axis=2)
+    resample = Image.Resampling.NEAREST if resample_mode == "nearest" else Image.Resampling.BICUBIC
+    transformed = np.asarray(
+        Image.fromarray(packed, "RGBA").transform(
+            size,
+            Image.Transform.AFFINE,
+            affine,
+            resample=resample,
+            fillcolor=(0, 0, 0, 0),
+        ),
+        dtype=np.float32,
+    )
+
+    transformed_alpha = transformed[:, :, 3:4]
+    rgb = np.zeros_like(transformed[:, :, :3])
+    visible = transformed_alpha[:, :, 0] > 0
+    rgb[visible] = transformed[:, :, :3][visible] * 255.0 / transformed_alpha[visible]
+    output = np.concatenate((np.clip(np.rint(rgb), 0, 255), transformed_alpha), axis=2).astype(np.uint8)
     return Image.fromarray(output, "RGBA")
 
 

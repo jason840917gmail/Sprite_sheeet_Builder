@@ -87,6 +87,29 @@ class SettingsPanelTests(unittest.TestCase):
         panel.set_action_context("grid", True, 0, 10)
         self.assertTrue(panel.add_all_button.isEnabled())
 
+    def test_source_and_bucket_dimensions_are_independent(self) -> None:
+        panel = SettingsPanel()
+        panel.lock_tile_aspect.setChecked(False)
+        panel.lock_bucket_aspect.setChecked(False)
+
+        panel.tile_width.setValue(256)
+        panel.tile_height.setValue(128)
+        panel.bucket_tile_width.setValue(64)
+        panel.bucket_tile_height.setValue(32)
+
+        settings = panel.settings()
+        self.assertEqual((settings.tile_width, settings.tile_height), (256, 128))
+        self.assertEqual((settings.bucket_tile_width, settings.bucket_tile_height), (64, 32))
+        self.assertEqual(settings.bucket_resize_mode, "fit")
+
+    def test_bucket_symmetry_does_not_change_source_selection(self) -> None:
+        panel = SettingsPanel()
+        panel.tile_width.setValue(256)
+        panel.bucket_tile_width.setValue(64)
+
+        self.assertEqual(panel.bucket_tile_height.value(), 64)
+        self.assertEqual(panel.tile_width.value(), 256)
+
 
 if __name__ == "__main__":
     unittest.main()

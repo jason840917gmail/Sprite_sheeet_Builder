@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from PIL import Image
 
+from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
+
 
 @dataclass(slots=True)
 class TileItem:
@@ -22,6 +24,16 @@ class TileItem:
     source_path: str | None = None
     resize_size: tuple[int, int] | None = None
     resize_mode: str | None = None
+    base_image_rgba: Image.Image | None = None
+    transform: TileTransform = field(default_factory=TileTransform)
+
+    def __post_init__(self) -> None:
+        self.image_rgba = self.image_rgba.convert("RGBA").copy()
+        if self.base_image_rgba is None:
+            self.base_image_rgba = self.image_rgba.copy()
+        else:
+            self.base_image_rgba = self.base_image_rgba.convert("RGBA").copy()
+        self.transform = self.transform.copy().validated()
 
     def duplicate(self, name: str) -> "TileItem":
         return TileItem(
@@ -37,4 +49,6 @@ class TileItem:
             source_path=self.source_path,
             resize_size=self.resize_size,
             resize_mode=self.resize_mode,
+            base_image_rgba=self.base_image_rgba.copy(),
+            transform=self.transform.copy(),
         )

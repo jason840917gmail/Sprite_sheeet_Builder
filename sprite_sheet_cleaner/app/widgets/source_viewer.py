@@ -7,15 +7,20 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsEllipseItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
+    QGraphicsSimpleTextItem,
     QGraphicsView,
     QLabel,
     QWidget,
 )
+
+from sprite_sheet_cleaner.app.core.tile_transform import angle_between_points, snap_angle
+from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
 
 from sprite_sheet_cleaner.app.core.grid_geometry import (
     GridSpec,
@@ -27,7 +32,7 @@ from sprite_sheet_cleaner.app.core.grid_geometry import (
 )
 
 
-ViewerTool = Literal["pointer", "select", "grid", "retouch"]
+ViewerTool = Literal["pointer", "select", "grid", "retouch", "rotate"]
 
 
 class RulerWidget(QWidget):
@@ -121,6 +126,9 @@ class SourceViewer(QGraphicsView):
     retouchDragged = Signal(object)
     retouchReleased = Signal()
     retouchSampleRequested = Signal(object)
+    tileTransformPreviewChanged = Signal(object)
+    tileTransformCommitRequested = Signal()
+    tileTransformCancelRequested = Signal()
 
     RULER_HEIGHT = 32
     RULER_WIDTH = 56
@@ -136,6 +144,12 @@ class SourceViewer(QGraphicsView):
         self._selection_item = QGraphicsRectItem()
         self._selection_grid_item = QGraphicsPathItem()
         self._retouch_cursor_item = QGraphicsEllipseItem()
+        self._transform_canvas_item = QGraphicsRectItem()
+        self._transform_outline_item = QGraphicsPathItem()
+        self._transform_handles = [QGraphicsEllipseItem() for _ in range(4)]
+        self._transform_ring_item = QGraphicsEllipseItem()
+        self._transform_pivot_item = QGraphicsEllipseItem()
+        self._transform_angle_item = QGraphicsSimpleTextItem()
 
         grid_pen = QPen(QColor(90, 210, 255, 220), 1)
         grid_pen.setCosmetic(True)
@@ -189,6 +203,46 @@ class SourceViewer(QGraphicsView):
         self._retouch_cursor_item.setAcceptHoverEvents(False)
         self._retouch_cursor_item.setVisible(False)
 
+        canvas_pen = QPen(QColor(225, 235, 245, 185), 1, Qt.DashLine)
+        canvas_pen.setCosmetic(True)
+        self._transform_canvas_item.setPen(canvas_pen)
+        self._transform_canvas_item.setBrush(QBrush(Qt.NoBrush))
+        self._transform_canvas_item.setVisible(False)
+
+        transform_pen = QPen(QColor("#ffb347"), 2, Qt.DashLine)
+        transform_pen.setCosmetic(True)
+        self._transform_outline_item.setPen(transform_pen)
+        self._transform_outline_item.setBrush(QBrush(Qt.NoBrush))
+        self._transform_outline_item.setVisible(False)
+
+        handle_pen = QPen(QColor("#fff4dd"), 1.5)
+        handle_pen.setCosmetic(True)
+        for handle in self._transform_handles:
+            handle.setPen(handle_pen)
+            handle.setBrush(QBrush(QColor("#ff9f2f")))
+            handle.setVisible(False)
+        ring_pen = QPen(QColor("#ffb347"), 2)
+        ring_pen.setCosmetic(True)
+        self._transform_ring_item.setPen(ring_pen)
+        self._transform_ring_item.setBrush(QBrush(QColor(255, 159, 47, 34)))
+        self._transform_ring_item.setVisible(False)
+        pivot_pen = QPen(QColor("#ffffff"), 1.5)
+        pivot_pen.setCosmetic(True)
+        self._transform_pivot_item.setPen(pivot_pen)
+        self._transform_pivot_item.setBrush(QBrush(QColor("#1f8fff")))
+        self._transform_pivot_item.setVisible(False)
+        self._transform_angle_item.setBrush(QBrush(QColor("#fff4dd")))
+        self._transform_angle_item.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        self._transform_angle_item.setVisible(False)
+
+        self._transform_canvas_item.setZValue(8)
+        self._transform_outline_item.setZValue(9)
+        for handle in self._transform_handles:
+            handle.setZValue(10)
+        self._transform_ring_item.setZValue(10)
+        self._transform_pivot_item.setZValue(11)
+        self._transform_angle_item.setZValue(12)
+
         self._scene.addItem(self._pixmap_item)
         self._scene.addItem(self._grid_added_item)
         self._scene.addItem(self._grid_item)
@@ -197,6 +251,13 @@ class SourceViewer(QGraphicsView):
         self._scene.addItem(self._selection_item)
         self._scene.addItem(self._selection_grid_item)
         self._scene.addItem(self._retouch_cursor_item)
+        self._scene.addItem(self._transform_canvas_item)
+        self._scene.addItem(self._transform_outline_item)
+        for handle in self._transform_handles:
+            self._scene.addItem(handle)
+        self._scene.addItem(self._transform_ring_item)
+        self._scene.addItem(self._transform_pivot_item)
+        self._scene.addItem(self._transform_angle_item)
         self.setScene(self._scene)
 
         self.setMouseTracking(True)
@@ -230,6 +291,11 @@ class SourceViewer(QGraphicsView):
         self._retouching = False
         self._retouch_brush_diameter = 24
         self._retouch_cursor_scene: QPointF | None = None
+        self._tile_transform: TileTransform | None = None
+        self._transform_content_rect: QRectF | None = None
+        self._transform_drag_mode: str | None = None
+        self._transform_drag_start = QPointF()
+        self._transform_drag_start_transform: TileTransform | None = None
         self._pan_origin = QPoint()
         self._pan_h_value = 0
         self._pan_v_value = 0
@@ -264,7 +330,7 @@ class SourceViewer(QGraphicsView):
         return self._tool
 
     def set_tool(self, tool: ViewerTool) -> None:
-        if tool not in ("pointer", "select", "grid", "retouch"):
+        if tool not in ("pointer", "select", "grid", "retouch", "rotate"):
             raise ValueError(f"Unknown source viewer tool: {tool}")
         if tool != self._tool:
             self.clear_selection()
@@ -274,6 +340,7 @@ class SourceViewer(QGraphicsView):
             self._hide_retouch_cursor()
         self._update_cursor()
         self._rebuild_grid()
+        self._update_transform_overlay()
         self._update_tool_hint()
         self.toolChanged.emit(tool)
 
@@ -373,6 +440,7 @@ class SourceViewer(QGraphicsView):
         self.clear_selection()
         self._rebuild_grid()
         self.reset_zoom()
+        self._update_transform_overlay()
         self._update_tool_hint()
 
     def refresh_image(self, image: QImage) -> None:
@@ -389,11 +457,35 @@ class SourceViewer(QGraphicsView):
             self._update_scene_rect()
             self._update_rulers()
         self._update_retouch_cursor_geometry()
+        self._update_transform_overlay()
         self._update_tool_hint()
 
     def set_retouch_brush_size(self, diameter: int) -> None:
         self._retouch_brush_diameter = max(1, int(diameter))
         self._update_retouch_cursor_geometry()
+
+    def set_tile_transform(
+        self,
+        transform: TileTransform | None,
+        content_rect: tuple[int, int, int, int] | None = None,
+        *,
+        preserve_drag: bool = False,
+    ) -> None:
+        self._tile_transform = transform.copy().validated() if transform is not None else None
+        if transform is None:
+            self._transform_content_rect = None
+        elif content_rect is not None:
+            left, top, right, bottom = content_rect
+            self._transform_content_rect = QRectF(left, top, right - left, bottom - top)
+        else:
+            self._transform_content_rect = QRectF(0, 0, self._image_size[0], self._image_size[1])
+        if not preserve_drag:
+            self._transform_drag_mode = None
+            self._transform_drag_start_transform = None
+        self._update_transform_overlay()
+
+    def tile_transform(self) -> TileTransform | None:
+        return self._tile_transform.copy() if self._tile_transform is not None else None
 
     def _show_retouch_cursor(self, scene_point: QPointF) -> None:
         if self._tool != "retouch" or not self.has_image():
@@ -474,6 +566,7 @@ class SourceViewer(QGraphicsView):
         self._zoom = self.transform().m11()
         self.zoomChanged.emit(self._zoom)
         self._update_rulers()
+        self._update_transform_overlay()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -501,6 +594,15 @@ class SourceViewer(QGraphicsView):
             return
 
         if event.button() == Qt.LeftButton:
+            if self._tool == "rotate" and self._tile_transform is not None:
+                point = self.mapToScene(self._event_pos(event))
+                mode = self._transform_hit_test(point)
+                if mode is not None:
+                    self._transform_drag_mode = mode
+                    self._transform_drag_start = QPointF(point)
+                    self._transform_drag_start_transform = self._tile_transform.copy()
+                    event.accept()
+                    return
             if self._tool == "retouch":
                 point = self._clamped_scene_point(self._event_pos(event))
                 self._show_retouch_cursor(point)
@@ -547,6 +649,29 @@ class SourceViewer(QGraphicsView):
             event.accept()
             return
 
+        if self._transform_drag_mode is not None and self._transform_drag_start_transform is not None:
+            point = self.mapToScene(self._event_pos(event))
+            transform = self._transform_drag_start_transform.copy()
+            width, height = self._image_size
+            if self._transform_drag_mode == "pivot":
+                transform.pivot_x = min(max(point.x() / max(width, 1), 0.0), 1.0)
+                transform.pivot_y = min(max(point.y() / max(height, 1), 0.0), 1.0)
+            else:
+                pivot = (transform.pivot_x * width, transform.pivot_y * height)
+                delta = angle_between_points(
+                    pivot,
+                    (self._transform_drag_start.x(), self._transform_drag_start.y()),
+                    (point.x(), point.y()),
+                )
+                transform.angle_degrees += delta
+                if event.modifiers() & Qt.ShiftModifier:
+                    transform.angle_degrees = snap_angle(transform.angle_degrees)
+            self._tile_transform = transform.validated()
+            self._update_transform_overlay()
+            self.tileTransformPreviewChanged.emit(self._tile_transform.copy())
+            event.accept()
+            return
+
         if self._placing_selection:
             self._place_fixed_selection(self._event_pos(event))
             event.accept()
@@ -577,6 +702,13 @@ class SourceViewer(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._transform_drag_mode is not None:
+            self._transform_drag_mode = None
+            self._transform_drag_start_transform = None
+            self._update_cursor()
+            event.accept()
+            return
+
         if event.button() == Qt.LeftButton and self._retouching:
             self._retouching = False
             self.retouchReleased.emit()
@@ -611,6 +743,15 @@ class SourceViewer(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event) -> None:
+        if self._tool == "rotate":
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self.tileTransformCommitRequested.emit()
+                event.accept()
+                return
+            if event.key() == Qt.Key_Escape:
+                self.tileTransformCancelRequested.emit()
+                event.accept()
+                return
         if event.key() == Qt.Key_Escape:
             self.clear_selection()
             event.accept()
@@ -677,6 +818,7 @@ class SourceViewer(QGraphicsView):
         self._zoom *= factor
         self.zoomChanged.emit(self._zoom)
         self._update_rulers()
+        self._update_transform_overlay()
 
     def _start_pan(self, event) -> None:
         self._panning = True
@@ -859,6 +1001,119 @@ class SourceViewer(QGraphicsView):
         self._selection_grid_item.setPath(path)
         self._selection_grid_item.setVisible(not path.isEmpty())
 
+    def _transform_geometry(self) -> tuple[list[QPointF], QPointF]:
+        if self._tile_transform is None:
+            return [], QPointF()
+        width, height = self._image_size
+        transform = self._tile_transform
+        pivot = QPointF(transform.pivot_x * width, transform.pivot_y * height)
+        radians = math.radians(transform.angle_degrees)
+        cosine = math.cos(radians)
+        sine = math.sin(radians)
+        points: list[QPointF] = []
+        rect = self._transform_content_rect or QRectF(0, 0, width, height)
+        for x, y in (
+            (rect.left(), rect.top()),
+            (rect.right(), rect.top()),
+            (rect.right(), rect.bottom()),
+            (rect.left(), rect.bottom()),
+        ):
+            dx = (x - pivot.x()) * transform.scale_x
+            dy = (y - pivot.y()) * transform.scale_y
+            points.append(
+                QPointF(
+                    pivot.x() + cosine * dx - sine * dy,
+                    pivot.y() + sine * dx + cosine * dy,
+                )
+            )
+        return points, pivot
+
+    def _set_transform_items_visible(self, visible: bool) -> None:
+        self._transform_canvas_item.setVisible(visible)
+        self._transform_outline_item.setVisible(visible)
+        for handle in self._transform_handles:
+            handle.setVisible(visible)
+        self._transform_ring_item.setVisible(visible)
+        self._transform_pivot_item.setVisible(visible)
+        self._transform_angle_item.setVisible(visible)
+
+    def _update_transform_overlay(self) -> None:
+        visible = self._tool == "rotate" and self.has_image() and self._tile_transform is not None
+        if not visible:
+            self._set_transform_items_visible(False)
+            return
+        points, pivot = self._transform_geometry()
+        if len(points) != 4:
+            self._set_transform_items_visible(False)
+            return
+
+        width, height = self._image_size
+        self._transform_canvas_item.setRect(QRectF(0, 0, width, height))
+        path = QPainterPath(points[0])
+        for point in points[1:]:
+            path.lineTo(point)
+        path.closeSubpath()
+        self._transform_outline_item.setPath(path)
+
+        zoom = max(abs(self._zoom), 0.001)
+        handle_radius = 6.0 / zoom
+        for item, point in zip(self._transform_handles, points):
+            item.setRect(
+                QRectF(
+                    point.x() - handle_radius,
+                    point.y() - handle_radius,
+                    handle_radius * 2,
+                    handle_radius * 2,
+                )
+            )
+        ring_radius = 18.0 / zoom
+        self._transform_ring_item.setRect(
+            QRectF(
+                pivot.x() - ring_radius,
+                pivot.y() - ring_radius,
+                ring_radius * 2,
+                ring_radius * 2,
+            )
+        )
+        pivot_radius = 5.0 / zoom
+        self._transform_pivot_item.setRect(
+            QRectF(
+                pivot.x() - pivot_radius,
+                pivot.y() - pivot_radius,
+                pivot_radius * 2,
+                pivot_radius * 2,
+            )
+        )
+        clipped = any(
+            point.x() < 0 or point.y() < 0 or point.x() > width or point.y() > height
+            for point in points
+        )
+        pen = self._transform_outline_item.pen()
+        pen.setColor(QColor("#ff5d5d") if clipped else QColor("#ffb347"))
+        self._transform_outline_item.setPen(pen)
+        angle_text = f"{self._tile_transform.angle_degrees:.1f}°"
+        if clipped:
+            angle_text += " · clipped"
+        self._transform_angle_item.setText(angle_text)
+        self._transform_angle_item.setPos(points[0] + QPointF(10.0 / zoom, 10.0 / zoom))
+        self._set_transform_items_visible(True)
+
+    def _transform_hit_test(self, point: QPointF) -> str | None:
+        if self._tile_transform is None or self._tool != "rotate":
+            return None
+        points, pivot = self._transform_geometry()
+        zoom = max(abs(self._zoom), 0.001)
+        pivot_limit = 8.0 / zoom
+        if math.hypot(point.x() - pivot.x(), point.y() - pivot.y()) <= pivot_limit:
+            return "pivot"
+        distance_to_pivot = math.hypot(point.x() - pivot.x(), point.y() - pivot.y())
+        if 11.0 / zoom <= distance_to_pivot <= 25.0 / zoom:
+            return "rotate"
+        corner_limit = 12.0 / zoom
+        if any(math.hypot(point.x() - corner.x(), point.y() - corner.y()) <= corner_limit for corner in points):
+            return "rotate"
+        return None
+
     def _update_cursor(self) -> None:
         if self._panning or self._dragging_grid:
             self.setCursor(Qt.ClosedHandCursor)
@@ -868,6 +1123,8 @@ class SourceViewer(QGraphicsView):
             self.setCursor(Qt.PointingHandCursor)
         elif self._tool == "retouch":
             self.setCursor(Qt.BlankCursor if self._retouch_cursor_item.isVisible() else Qt.CrossCursor)
+        elif self._tool == "rotate":
+            self.setCursor(Qt.CrossCursor)
         else:
             self.setCursor(Qt.CrossCursor)
 
@@ -1095,6 +1352,8 @@ class SourceViewer(QGraphicsView):
             return "Left click: add tile\nLeft drag: select tiles\nRight-click drag: move grid\nArrow keys: nudge 1px\nWASD: pan view"
         if self._tool == "retouch":
             return "Left drag: paint cleanup\nAlt-click: set Clone Color source\nWASD: pan view"
+        if self._tool == "rotate":
+            return "Drag a corner or center ring: rotate\nDrag center dot: move pivot\nShift: snap 15°\nEnter: apply\nEsc: cancel"
         return None
 
     def _update_rulers(self) -> None:

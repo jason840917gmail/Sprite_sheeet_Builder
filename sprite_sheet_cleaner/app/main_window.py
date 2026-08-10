@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from PIL import Image
@@ -25,6 +26,7 @@ from sprite_sheet_cleaner.app.engines.ai_worker_engine import IsolatedAIWorkerEn
 from sprite_sheet_cleaner.app.core.project_model import ProjectModel
 from sprite_sheet_cleaner.app.core.sheet_builder import build_sheet, sheet_capacity
 from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop
+from sprite_sheet_cleaner.app.core.tile_transform import render_tile_transform
 from sprite_sheet_cleaner.app.core.retouch import apply_retouch_stroke
 from sprite_sheet_cleaner.app.core.video_document import VideoDocument
 from sprite_sheet_cleaner.app.core.video_source import (
@@ -37,6 +39,7 @@ from sprite_sheet_cleaner.app.core.video_source import (
 )
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
+from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
 from sprite_sheet_cleaner.app.models.video_settings import VideoSettings
 from sprite_sheet_cleaner.app.jobs.qt_job_controller import JobHandle, QtJobController
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
@@ -48,6 +51,7 @@ from sprite_sheet_cleaner.app.utils.tool_icons import (
     create_help_icon,
     create_pointer_icon,
     create_retouch_icon,
+    create_rotate_icon,
     create_select_icon,
 )
 from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
@@ -61,8 +65,14 @@ from sprite_sheet_cleaner.app.widgets.source_viewer import SourceViewer
 from sprite_sheet_cleaner.app.widgets.model_manager_dialog import ModelManagerDialog, default_runtime_registry
 from sprite_sheet_cleaner.app.widgets.help_dialog import HelpDialog
 from sprite_sheet_cleaner.app.widgets.retouch_panel import RetouchPanel
+from sprite_sheet_cleaner.app.widgets.tile_transform_panel import TileTransformPanel
 from sprite_sheet_cleaner.app.commands.command_stack import CommandStack
-from sprite_sheet_cleaner.app.commands.bucket_commands import BucketStateCommand, clone_tiles
+from sprite_sheet_cleaner.app.commands.bucket_commands import (
+    BucketResizeCommand,
+    BucketStateCommand,
+    clone_settings,
+    clone_tiles,
+)
 from sprite_sheet_cleaner.app.widgets.video_settings_panel import VideoSettingsPanel
 
 
@@ -72,7 +82,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Sprite Sheet Cleaner")
         self.resize(1320, 820)
 
-        self.model = ProjectModel()
+        self.model = ProjectModel(settings=AppSettings(bucket_resize_mode="fit"))
         self._image_settings = self.model.settings
         self.source_image: Image.Image | None = None
         self.source_repository = SourceRepository()
@@ -111,6 +121,10 @@ class MainWindow(QMainWindow):
         self._retouch_stroke_before = None
         self._retouch_stroke_before_image: Image.Image | None = None
         self._retouch_stroke_changed = False
+        self._transform_tile_index: int | None = None
+        self._transform_before_tiles = None
+        self._transform_working: TileTransform | None = None
+        self._transform_dirty = False
 
         self.source_viewer = SourceViewer()
         self.source_background_panel = SourceBackgroundPanel()
@@ -122,6 +136,7 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel()
         self.video_settings_panel = VideoSettingsPanel()
         self.retouch_panel = RetouchPanel()
+        self.tile_transform_panel = TileTransformPanel()
         self.bucket_panel = BucketPanel()
         self.final_preview = FinalPreview()
         self._apply_selection_geometry()
@@ -139,6 +154,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.setMinimumWidth(310)
         self.video_settings_panel.setMinimumWidth(310)
         self.retouch_panel.setMinimumWidth(310)
+        self.tile_transform_panel.setMinimumWidth(310)
         self.bucket_panel.setMinimumWidth(310)
         self.bucket_panel.setMinimumHeight(240)
 
@@ -154,6 +170,7 @@ class MainWindow(QMainWindow):
         self.right_panel_stack.addWidget(self.settings_panel)
         self.right_panel_stack.addWidget(self.video_settings_panel)
         self.right_panel_stack.addWidget(self.retouch_panel)
+        self.right_panel_stack.addWidget(self.tile_transform_panel)
         self.right_panel_stack.setCurrentWidget(self.settings_panel)
 
         self.right_splitter = QSplitter(Qt.Vertical)
@@ -239,14 +256,21 @@ class MainWindow(QMainWindow):
         self.retouch_action.setToolTip(
             "Paint Cleanup: erase pixels, paint a color, or clone color over the source preview or selected bucket tile"
         )
+        self.rotate_action = QAction(create_rotate_icon(), "Rotate", self)
+        self.rotate_action.setCheckable(True)
+        self.rotate_action.setShortcut("R")
+        self.rotate_action.setToolTip("Rotate the selected bucket tile with on-canvas handles; Shift snaps to 15°")
+        self.rotate_action.setEnabled(False)
         self.tool_group.addAction(self.pointer_action)
         self.tool_group.addAction(self.select_action)
         self.tool_group.addAction(self.grid_action)
         self.tool_group.addAction(self.retouch_action)
+        self.tool_group.addAction(self.rotate_action)
         self.tool_bar.addAction(self.pointer_action)
         self.tool_bar.addAction(self.select_action)
         self.tool_bar.addAction(self.grid_action)
         self.tool_bar.addAction(self.retouch_action)
+        self.tool_bar.addAction(self.rotate_action)
         self.help_action = QAction(create_help_icon(), "Help", self)
         self.help_action.setShortcut(QKeySequence("F1"))
         self.help_action.setToolTip("Open the indexed in-app help guide.")
@@ -257,6 +281,7 @@ class MainWindow(QMainWindow):
         tool_menu.addAction(self.select_action)
         tool_menu.addAction(self.grid_action)
         tool_menu.addAction(self.retouch_action)
+        tool_menu.addAction(self.rotate_action)
         help_menu.addAction(self.help_action)
 
         self.open_action = QAction("&Open Image...", self)
@@ -320,6 +345,7 @@ class MainWindow(QMainWindow):
         self.select_action.triggered.connect(lambda: self._set_viewer_tool("select"))
         self.grid_action.triggered.connect(lambda: self._set_viewer_tool("grid"))
         self.retouch_action.triggered.connect(lambda: self._set_viewer_tool("retouch"))
+        self.rotate_action.triggered.connect(lambda: self._set_viewer_tool("rotate"))
         self.add_selection_action.triggered.connect(self._add_selection_to_bucket)
         self.delete_tile_action.triggered.connect(self._delete_selected_tile)
         self.clear_selection_action.triggered.connect(self._clear_source_selection)
@@ -338,6 +364,9 @@ class MainWindow(QMainWindow):
         self.source_viewer.retouchDragged.connect(self._retouch_dragged)
         self.source_viewer.retouchReleased.connect(self._retouch_released)
         self.source_viewer.retouchSampleRequested.connect(self._retouch_sample_requested)
+        self.source_viewer.tileTransformPreviewChanged.connect(self._tile_transform_preview_changed)
+        self.source_viewer.tileTransformCommitRequested.connect(self._apply_tile_transform)
+        self.source_viewer.tileTransformCancelRequested.connect(self._cancel_tile_transform)
         self.video_tabs.currentChanged.connect(self._video_tab_changed)
         self.video_tabs.tabCloseRequested.connect(self._close_video_tab)
         self.settings_panel.settingsChanged.connect(self._settings_changed)
@@ -357,6 +386,12 @@ class MainWindow(QMainWindow):
         self.retouch_panel.modeChanged.connect(self._retouch_mode_changed)
         self.retouch_panel.targetChanged.connect(self._retouch_target_changed)
         self.retouch_panel.brush_size.valueChanged.connect(self.source_viewer.set_retouch_brush_size)
+        self.tile_transform_panel.transformChanged.connect(self._tile_transform_preview_changed)
+        self.tile_transform_panel.applyRequested.connect(self._apply_tile_transform)
+        self.tile_transform_panel.cancelRequested.connect(self._cancel_tile_transform)
+        self.tile_transform_panel.fitContentRequested.connect(self._fit_transform_content)
+        self.tile_transform_panel.fillCanvasRequested.connect(self._fill_transform_canvas)
+        self.tile_transform_panel.fitRotatedRequested.connect(self._fit_rotated_content)
         self.final_preview.animationRequested.connect(self._open_animation_preview)
         self.bucket_panel.deleteRequested.connect(self._delete_tile)
         self.bucket_panel.clearRequested.connect(self._clear_bucket)
@@ -1183,11 +1218,44 @@ class MainWindow(QMainWindow):
         # geometry/settings changes do not silently switch the selected remover.
         settings.remove_background = self.model.settings.remove_background
         settings.tile_background_engine = self.model.settings.tile_background_engine
+        previous = clone_settings(self.model.settings)
+        bucket_size_changed = (
+            previous.bucket_tile_width,
+            previous.bucket_tile_height,
+        ) != (
+            settings.bucket_tile_width,
+            settings.bucket_tile_height,
+        )
+        extraction_changed = (
+            previous.trim_transparent,
+            previous.padding,
+            previous.anchor,
+        ) != (
+            settings.trim_transparent,
+            settings.padding,
+            settings.anchor,
+        )
         self._image_settings = settings
         self.model.settings = settings
         self._apply_selection_geometry()
         self._sync_sheet_to_grid()
-        if self.source_image is not None and self.model.tiles:
+        if bucket_size_changed and self.model.tiles:
+            try:
+                before_tiles = clone_tiles(self.model.tiles)
+                self.model.resize_bucket_tiles(settings)
+                command = BucketResizeCommand(
+                    self.model,
+                    previous,
+                    before_tiles,
+                    clone_settings(settings),
+                    clone_tiles(self.model.tiles),
+                )
+                self.command_stack.execute(command)
+            except Exception as exc:
+                self.model.settings = previous
+                self.settings_panel.set_settings(previous)
+                QMessageBox.warning(self, "Settings update failed", str(exc))
+        elif extraction_changed and self.source_image is not None and self.model.tiles:
             try:
                 self.model.reprocess_tiles(self.source_image)
             except Exception as exc:
@@ -1949,6 +2017,9 @@ class MainWindow(QMainWindow):
     def _preview_bucket_tile(self, index: int) -> None:
         if not 0 <= index < len(self.model.tiles):
             return
+        if self.source_viewer.current_tool() == "rotate":
+            self._begin_tile_transform(index)
+            return
         tile = self.model.tiles[index]
         if self.source_viewer.current_tool() == "retouch":
             if self.retouch_panel.current_target() != "bucket":
@@ -1966,10 +2037,249 @@ class MainWindow(QMainWindow):
         if not self._bucket_preview_active:
             return
         self._bucket_preview_active = False
+        self.source_viewer.set_tile_transform(None)
         image = self._source_preview_override or self.source_image
         if image is not None:
             self.source_viewer.set_image(pil_to_qimage(image))
             self._apply_selection_geometry()
+
+    def _begin_tile_transform(self, index: int) -> None:
+        if not 0 <= index < len(self.model.tiles):
+            self.tile_transform_panel.set_target(None)
+            return
+        if self._transform_tile_index == index and self._transform_working is not None:
+            return
+        if self._transform_dirty and not self._resolve_dirty_transform():
+            return
+
+        tile = self.model.tiles[index]
+        self._transform_tile_index = index
+        self._transform_before_tiles = clone_tiles(self.model.tiles)
+        self._transform_working = tile.transform.copy()
+        self._transform_dirty = False
+        self._bucket_preview_active = True
+        self.source_viewer.set_image(pil_to_qimage(tile.image_rgba))
+        self.source_viewer.set_tile_transform(
+            self._transform_working,
+            tile.base_image_rgba.getchannel("A").getbbox(),
+        )
+        self.tile_transform_panel.set_transform(self._transform_working)
+        self.tile_transform_panel.set_target(tile.name)
+        self.statusBar().showMessage(
+            f"Rotating bucket tile {index + 1}: {tile.name}. Drag a handle, press Enter to apply, or Esc to cancel."
+        )
+
+    def _resolve_dirty_transform(self) -> bool:
+        if not self._transform_dirty:
+            return True
+        message = QMessageBox(self)
+        message.setWindowTitle("Unapplied tile transform")
+        message.setText("Apply the current tile transform before switching targets?")
+        message.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        message.setDefaultButton(QMessageBox.Save)
+        choice = message.exec()
+        if choice == QMessageBox.Cancel:
+            return False
+        if choice == QMessageBox.Save:
+            self._apply_tile_transform()
+        else:
+            self._cancel_tile_transform()
+        return True
+
+    def _tile_transform_preview_changed(self, transform: object) -> None:
+        index = self._transform_tile_index
+        if not isinstance(transform, TileTransform) or index is None or not 0 <= index < len(self.model.tiles):
+            return
+        working = transform.copy().validated()
+        tile = self.model.tiles[index]
+        try:
+            preview = render_tile_transform(tile.base_image_rgba, self.model.settings.bucket_settings(), working)
+        except Exception as exc:
+            self.tile_transform_panel.set_target(tile.name)
+            self.statusBar().showMessage(f"Transform preview failed: {exc}")
+            return
+        self._transform_working = working
+        self._transform_dirty = working != tile.transform
+        self.source_viewer.refresh_image(pil_to_qimage(preview))
+        self.source_viewer.set_tile_transform(
+            working,
+            tile.base_image_rgba.getchannel("A").getbbox(),
+            preserve_drag=True,
+        )
+        self.tile_transform_panel.set_transform(working)
+        self.tile_transform_panel.set_target(
+            tile.name,
+            dirty=self._transform_dirty,
+            clipped=self._transform_is_clipped(tile, working),
+        )
+
+    def _apply_tile_transform(self) -> None:
+        index = self._transform_tile_index
+        working = self._transform_working
+        if index is None or working is None or not 0 <= index < len(self.model.tiles):
+            return
+        tile = self.model.tiles[index]
+        if self._transform_dirty:
+            before = self._transform_before_tiles or clone_tiles(self.model.tiles)
+            tile.transform = working.copy().validated()
+            tile.image_rgba = render_tile_transform(
+                tile.base_image_rgba,
+                self.model.settings.bucket_settings(),
+                tile.transform,
+            )
+            tile.final_size = tile.image_rgba.size
+            self._record_bucket_snapshot(before)
+            self._refresh_all(selected_index=index)
+        self._transform_before_tiles = clone_tiles(self.model.tiles)
+        self._transform_working = self.model.tiles[index].transform.copy()
+        self._transform_dirty = False
+        self.source_viewer.refresh_image(pil_to_qimage(self.model.tiles[index].image_rgba))
+        self.source_viewer.set_tile_transform(
+            self._transform_working,
+            self.model.tiles[index].base_image_rgba.getchannel("A").getbbox(),
+        )
+        self.tile_transform_panel.set_transform(self._transform_working)
+        self.tile_transform_panel.set_target(self.model.tiles[index].name)
+        self.statusBar().showMessage(f"Applied transform to {self.model.tiles[index].name}.")
+
+    def _cancel_tile_transform(self) -> None:
+        index = self._transform_tile_index
+        if index is None or not 0 <= index < len(self.model.tiles):
+            return
+        tile = self.model.tiles[index]
+        self._transform_working = tile.transform.copy()
+        self._transform_dirty = False
+        self.source_viewer.refresh_image(pil_to_qimage(tile.image_rgba))
+        self.source_viewer.set_tile_transform(
+            self._transform_working,
+            tile.base_image_rgba.getchannel("A").getbbox(),
+        )
+        self.tile_transform_panel.set_transform(self._transform_working)
+        self.tile_transform_panel.set_target(tile.name)
+        self.statusBar().showMessage(f"Cancelled unapplied transform for {tile.name}.")
+
+    def _transformed_content_points(
+        self,
+        tile,
+        transform: TileTransform,
+    ) -> list[tuple[float, float]]:
+        bbox = tile.base_image_rgba.getchannel("A").getbbox()
+        if bbox is None:
+            return []
+        width, height = tile.base_image_rgba.size
+        pivot_x = transform.pivot_x * width
+        pivot_y = transform.pivot_y * height
+        radians = math.radians(transform.angle_degrees)
+        cosine = math.cos(radians)
+        sine = math.sin(radians)
+        points: list[tuple[float, float]] = []
+        for x, y in ((bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[2], bbox[3]), (bbox[0], bbox[3])):
+            dx = (x - pivot_x) * transform.scale_x
+            dy = (y - pivot_y) * transform.scale_y
+            points.append((pivot_x + cosine * dx - sine * dy, pivot_y + sine * dx + cosine * dy))
+        return points
+
+    def _transform_is_clipped(self, tile, transform: TileTransform) -> bool:
+        width, height = tile.base_image_rgba.size
+        epsilon = 1e-6
+        return any(
+            x < -epsilon or y < -epsilon or x > width + epsilon or y > height + epsilon
+            for x, y in self._transformed_content_points(tile, transform)
+        )
+
+    def _maximum_uniform_transform_scale(self, tile, transform: TileTransform) -> float:
+        bbox = tile.base_image_rgba.getchannel("A").getbbox()
+        if bbox is None:
+            return 1.0
+        settings = self.model.settings.bucket_settings()
+        width, height = tile.base_image_rgba.size
+        pivot_x = transform.pivot_x * width
+        pivot_y = transform.pivot_y * height
+        radians = math.radians(transform.angle_degrees)
+        cosine = math.cos(radians)
+        sine = math.sin(radians)
+        limits: list[float] = []
+        left = float(settings.padding)
+        top = float(settings.padding)
+        right = float(width - settings.padding)
+        bottom = float(height - settings.padding)
+        for x, y in ((bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[2], bbox[3]), (bbox[0], bbox[3])):
+            dx = x - pivot_x
+            dy = y - pivot_y
+            rotated_x = cosine * dx - sine * dy
+            rotated_y = sine * dx + cosine * dy
+            if rotated_x > 0:
+                limits.append((right - pivot_x) / rotated_x)
+            elif rotated_x < 0:
+                limits.append((pivot_x - left) / -rotated_x)
+            if rotated_y > 0:
+                limits.append((bottom - pivot_y) / rotated_y)
+            elif rotated_y < 0:
+                limits.append((pivot_y - top) / -rotated_y)
+        positive = [limit for limit in limits if limit > 0 and math.isfinite(limit)]
+        return max(0.01, min(positive, default=1.0))
+
+    def _fit_transform_content(self) -> None:
+        self._fit_rotated_content()
+
+    def _fill_transform_canvas(self) -> None:
+        index = self._transform_tile_index
+        if index is None or not 0 <= index < len(self.model.tiles) or self._transform_working is None:
+            return
+        tile = self.model.tiles[index]
+        bbox = tile.base_image_rgba.getchannel("A").getbbox()
+        if bbox is None:
+            return
+        settings = self.model.settings.bucket_settings()
+        inner_width = max(1, settings.tile_width - settings.padding * 2)
+        inner_height = max(1, settings.tile_height - settings.padding * 2)
+        scale = max(inner_width / max(1, bbox[2] - bbox[0]), inner_height / max(1, bbox[3] - bbox[1]))
+        transform = self._transform_working.copy()
+        transform.scale_x = scale
+        transform.scale_y = scale
+        self._tile_transform_preview_changed(transform)
+
+    def _fit_rotated_content(self) -> None:
+        index = self._transform_tile_index
+        if index is None or not 0 <= index < len(self.model.tiles) or self._transform_working is None:
+            return
+        transform = self._transform_working.copy()
+        scale = self._maximum_uniform_transform_scale(self.model.tiles[index], transform)
+        transform.scale_x = scale
+        transform.scale_y = scale
+        self._tile_transform_preview_changed(transform)
+
+    def _prepare_transform_for_bucket_mutation(self) -> bool:
+        if self.source_viewer.current_tool() != "rotate":
+            return True
+        return self._resolve_dirty_transform()
+
+    def _sync_transform_session_from_model(self, selected_index: int | None = None) -> None:
+        if self.source_viewer.current_tool() != "rotate":
+            return
+        if not self.model.tiles:
+            self._transform_tile_index = None
+            self._transform_before_tiles = None
+            self._transform_working = None
+            self._transform_dirty = False
+            self.source_viewer.set_tile_transform(None)
+            self.source_viewer.set_tool("select")
+            self.select_action.setChecked(True)
+            self.right_panel_stack.setCurrentWidget(
+                self.video_settings_panel if self.source_type == "video" else self.settings_panel
+            )
+            self._restore_source_after_bucket_preview()
+            return
+        index = selected_index
+        if index is None:
+            index = self._transform_tile_index
+        if index is None or not 0 <= index < len(self.model.tiles):
+            index = min(max(self.bucket_panel.current_index(), 0), len(self.model.tiles) - 1)
+        self._transform_tile_index = None
+        self._transform_before_tiles = None
+        self._transform_working = None
+        self._transform_dirty = False
+        self._begin_tile_transform(index)
 
     def _prepare_retouch_target(self, target: str) -> None:
         if target == "source" and self.source_type != "image":
@@ -1991,6 +2301,14 @@ class MainWindow(QMainWindow):
             if not 0 <= index < len(self.model.tiles):
                 self.retouch_panel.set_status("Select a bucket tile first, then choose Selected Bucket Tile.")
                 return
+            tile = self.model.tiles[index]
+            if tile.transform != TileTransform():
+                before = clone_tiles(self.model.tiles)
+                tile.base_image_rgba = tile.image_rgba.copy()
+                tile.transform = TileTransform()
+                tile.image_rgba = tile.base_image_rgba.copy()
+                tile.final_size = tile.image_rgba.size
+                self._record_bucket_snapshot(before)
             self._retouch_bucket_index = index
             self._bucket_preview_active = True
             image = self.model.tiles[index].image_rgba
@@ -2119,6 +2437,7 @@ class MainWindow(QMainWindow):
             if index is None or not 0 <= index < len(self.model.tiles):
                 return
             self.model.tiles[index].image_rgba = result
+            self.model.tiles[index].base_image_rgba = result.copy()
         else:
             self._retouch_work_image = result
         self.source_viewer.refresh_image(pil_to_qimage(result))
@@ -2171,12 +2490,16 @@ class MainWindow(QMainWindow):
     def _delete_tile(self, index: int) -> None:
         if index < 0:
             return
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         self._record_bucket_change(lambda: self.model.remove_tile(index))
         self._refresh_all(selected_index=min(index, len(self.model.tiles) - 1))
 
     def _clear_bucket(self) -> None:
         count = len(self.model.tiles)
         if count == 0:
+            return
+        if not self._prepare_transform_for_bucket_mutation():
             return
         confirmed = (
             QMessageBox.question(
@@ -2197,6 +2520,8 @@ class MainWindow(QMainWindow):
     def _duplicate_tile(self, index: int) -> None:
         if index < 0:
             return
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         if self._bucket_is_full():
             self._show_bucket_full_warning()
             return
@@ -2209,6 +2534,8 @@ class MainWindow(QMainWindow):
     def _move_tile(self, index: int, offset: int) -> None:
         if index < 0:
             return
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         before = clone_tiles(self.model.tiles)
         new_index = self.model.move_tile(index, offset)
         if [tile.tile_id for tile in before] != [tile.tile_id for tile in self.model.tiles]:
@@ -2216,6 +2543,8 @@ class MainWindow(QMainWindow):
         self._refresh_all(selected_index=new_index)
 
     def _reorder_tiles(self, order: object) -> None:
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         if not isinstance(order, list):
             return
         if len(order) != len(self.model.tiles):
@@ -2236,6 +2565,8 @@ class MainWindow(QMainWindow):
     def _rename_tile(self, index: int) -> None:
         if index < 0:
             return
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         current_name = self.model.tiles[index].name
         name, accepted = QInputDialog.getText(self, "Rename tile", "Name", text=current_name)
         if accepted and name.strip():
@@ -2254,15 +2585,42 @@ class MainWindow(QMainWindow):
         self.command_stack.execute(BucketStateCommand(self.model, before, after))
 
     def _undo_bucket(self) -> None:
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         if self.command_stack.undo():
+            if self.source_type == "image":
+                self._image_settings = self.model.settings
+                self.settings_panel.set_settings(self.model.settings)
+                self._apply_selection_geometry()
             self._refresh_all(selected_index=self.bucket_panel.current_index())
 
     def _redo_bucket(self) -> None:
+        if not self._prepare_transform_for_bucket_mutation():
+            return
         if self.command_stack.redo():
+            if self.source_type == "image":
+                self._image_settings = self.model.settings
+                self.settings_panel.set_settings(self.model.settings)
+                self._apply_selection_geometry()
             self._refresh_all(selected_index=self.bucket_panel.current_index())
 
     def _set_viewer_tool(self, tool: str) -> None:
-        if tool != "retouch":
+        current_tool = self.source_viewer.current_tool()
+        if tool == "rotate" and not self.model.tiles:
+            self.statusBar().showMessage("Add a bucket tile before using Rotate.")
+            self.select_action.setChecked(True)
+            return
+        if current_tool == "rotate" and tool != "rotate":
+            if self._transform_dirty and not self._resolve_dirty_transform():
+                self.rotate_action.setChecked(True)
+                return
+            self._transform_tile_index = None
+            self._transform_before_tiles = None
+            self._transform_working = None
+            self._transform_dirty = False
+            self.source_viewer.set_tile_transform(None)
+            self._restore_source_after_bucket_preview()
+        elif tool not in {"retouch", "rotate"}:
             self._restore_source_after_bucket_preview()
         self.source_viewer.set_tool(tool)
         self.source_viewer.setFocus(Qt.ShortcutFocusReason)
@@ -2275,13 +2633,20 @@ class MainWindow(QMainWindow):
             self.retouch_action.setChecked(True)
             self.right_panel_stack.setCurrentWidget(self.retouch_panel)
             self._prepare_retouch_target(self.retouch_panel.current_target())
+        elif tool == "rotate":
+            self.rotate_action.setChecked(True)
+            self.right_panel_stack.setCurrentWidget(self.tile_transform_panel)
+            index = self.bucket_panel.current_index()
+            if index < 0 and self.model.tiles:
+                index = 0
+            self._begin_tile_transform(index)
         else:
             self.select_action.setChecked(True)
             if self.source_type == "video":
                 self.right_panel_stack.setCurrentWidget(self.video_settings_panel)
             else:
                 self.right_panel_stack.setCurrentWidget(self.settings_panel)
-        if tool != "retouch":
+        if tool not in {"retouch", "rotate"}:
             self.right_panel_stack.setCurrentWidget(
                 self.video_settings_panel if self.source_type == "video" else self.settings_panel
             )
@@ -2334,6 +2699,7 @@ class MainWindow(QMainWindow):
         self._refresh_retouch_bucket_preview()
         self._refresh_action_context()
         self._update_status()
+        self._sync_transform_session_from_model(selected_index)
 
     def _refresh_retouch_bucket_preview(self) -> None:
         if self.source_viewer.current_tool() != "retouch" or self._retouch_target != "bucket":
@@ -2345,6 +2711,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_action_context(self) -> None:
         capacity = sheet_capacity(self.model.settings)
+        self.rotate_action.setEnabled(bool(self.model.tiles))
         self.settings_panel.set_action_context(
             self.source_viewer.current_tool(),
             self.source_viewer.grid_is_valid(),

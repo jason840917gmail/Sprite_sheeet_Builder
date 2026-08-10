@@ -77,6 +77,10 @@ Use the **Help** toolbar button, the **Help** menu, or `F1` to browse the indexe
 
 The default workflow does not resize, trim, or pad selected tiles. A fixed `256 x 256` selection exports as a `256 x 256` tile. Background removal can still be enabled when the source sheet uses a solid color background.
 
+Source selection size and bucket/output size can also be configured independently. For example, keep a `256 x 256` selection on the source while automatically fitting it into a `64 x 64` bucket tile; the final sheet then uses `64 x 64` cells. Fit, Fit Down Only, Fill/Crop, Stretch, and No Scale modes are available, with Smooth or Nearest resampling.
+
+Select a bucket tile and press `R` to rotate or scale it inside its fixed output canvas. Corner handles and the center ring rotate, the center dot moves the pivot, Shift snaps to 15-degree steps, and Enter/Esc apply or cancel. Committed transforms, bucket-size changes, and Paint edits are undoable and persist in `.sscproj` projects.
+
 The app auto-detects the background color when you open a source image. Use the `Detect` button beside Background color to re-sample the current selection border. If no selection exists, it samples the source image border. This is useful for AI sheets where the purple background is close to, but not exactly, `#FF00FF`.
 
 ## Recommended AI Sprite Settings

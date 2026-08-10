@@ -20,6 +20,18 @@ def tile(name: str, color: tuple[int, int, int, int]) -> TileItem:
 
 
 class SheetBuilderTests(unittest.TestCase):
+    def test_sheet_dimensions_use_bucket_size_not_selection_size(self) -> None:
+        settings = AppSettings(
+            tile_width=256,
+            tile_height=256,
+            bucket_tile_width=64,
+            bucket_tile_height=64,
+            sheet_columns=8,
+            sheet_rows=8,
+        )
+
+        self.assertEqual(sheet_dimensions(settings), (512, 512))
+
     def test_sheet_dimensions_and_capacity(self) -> None:
         settings = AppSettings(tile_width=4, tile_height=6, sheet_columns=3, sheet_rows=2)
 

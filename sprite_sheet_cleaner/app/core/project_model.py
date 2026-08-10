@@ -5,10 +5,17 @@ from dataclasses import dataclass, field
 
 from PIL import Image
 
-from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, process_crop, process_crop_with_resize
+from sprite_sheet_cleaner.app.core.bucket_renderer import prepare_bucket_base
+from sprite_sheet_cleaner.app.core.image_processor import (
+    clamp_crop_rect,
+    process_crop_to_bucket,
+    process_crop_with_resize_to_bucket,
+)
+from sprite_sheet_cleaner.app.core.tile_transform import render_tile_transform
 from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
 from sprite_sheet_cleaner.app.models.tile_item import TileItem
+from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
 from sprite_sheet_cleaner.app.core.video_source import FrameRef
 
 
@@ -75,15 +82,17 @@ class ProjectModel:
         name: str | None = None,
     ) -> TileItem:
         crop_rect = clamp_crop_rect(source_image, crop_rect)
-        image = process_crop(source_image, crop_rect, self.settings)
+        base, image = process_crop_to_bucket(source_image, crop_rect, self.settings)
+        bucket = self.settings.bucket_settings()
         item = TileItem(
             name=name or self.next_tile_name(),
             source_rect=crop_rect,
             source_size=(crop_rect[2], crop_rect[3]),
-            final_size=(self.settings.tile_width, self.settings.tile_height),
+            final_size=(bucket.tile_width, bucket.tile_height),
             image_rgba=image,
             source_type="image",
             source_path=self.source_image_path,
+            base_image_rgba=base,
         )
         self.tiles.append(item)
         return item
@@ -107,16 +116,18 @@ class ProjectModel:
         start_index = len(self.tiles)
         for offset, crop_rect in enumerate(crop_rects):
             normalized_rect = clamp_crop_rect(source_image, crop_rect)
-            image = process_crop(source_image, normalized_rect, self.settings)
+            base, image = process_crop_to_bucket(source_image, normalized_rect, self.settings)
+            bucket = self.settings.bucket_settings()
             items.append(
                 TileItem(
                     name=f"tile_{start_index + offset + 1:03d}",
                     source_rect=normalized_rect,
                     source_size=(normalized_rect[2], normalized_rect[3]),
-                    final_size=(self.settings.tile_width, self.settings.tile_height),
+                    final_size=(bucket.tile_width, bucket.tile_height),
                     image_rgba=image,
                     source_type="image",
                     source_path=self.source_image_path,
+                    base_image_rgba=base,
                 )
             )
         self.tiles.extend(items)
@@ -132,7 +143,12 @@ class ProjectModel:
         items: list[TileItem] = []
         for offset, (crop_rect, image_rgba) in enumerate(processed_images):
             normalized_rect = clamp_crop_rect(source_image, crop_rect)
-            image = image_rgba.convert("RGBA").copy()
+            bucket = self.settings.bucket_settings()
+            if image_rgba.size == (bucket.tile_width, bucket.tile_height):
+                base = image_rgba.convert("RGBA").copy()
+            else:
+                base = prepare_bucket_base(image_rgba, bucket)
+            image = render_tile_transform(base, bucket, TileTransform())
             items.append(
                 TileItem(
                     name=f"tile_{start_index + offset + 1:03d}",
@@ -142,6 +158,7 @@ class ProjectModel:
                     image_rgba=image,
                     source_type="image",
                     source_path=self.source_image_path,
+                    base_image_rgba=base,
                 )
             )
         self.tiles.extend(items)
@@ -169,23 +186,60 @@ class ProjectModel:
         if 0 <= index < len(self.tiles) and name.strip():
             self.tiles[index].name = name.strip()
 
-    def reprocess_tiles(self, source_image: Image.Image) -> None:
-        rebuilt: list[TileItem] = []
+    def resize_bucket_tiles(self, settings: AppSettings) -> None:
+        """Atomically move every editable tile base onto a new uniform bucket canvas."""
+        settings.validated()
+        bucket = settings.bucket_settings()
+        resized: list[TileItem] = []
         for tile in self.tiles:
-            crop_rect = clamp_crop_rect(source_image, tile.source_rect)
-            rebuilt.append(
+            base = prepare_bucket_base(tile.base_image_rgba, bucket)
+            image = render_tile_transform(base, bucket, tile.transform)
+            resized.append(
                 TileItem(
                     name=tile.name,
-                    source_rect=crop_rect,
-                    source_size=(crop_rect[2], crop_rect[3]),
-                    final_size=(self.settings.tile_width, self.settings.tile_height),
-                    image_rgba=process_crop(source_image, crop_rect, self.settings),
+                    source_rect=tile.source_rect,
+                    source_size=tile.source_size,
+                    final_size=image.size,
+                    image_rgba=image,
                     tile_id=tile.tile_id,
                     source_revision_id=tile.source_revision_id,
                     source_type=tile.source_type,
                     source_frame_index=tile.source_frame_index,
                     source_timestamp_ms=tile.source_timestamp_ms,
                     source_path=tile.source_path,
+                    resize_size=tile.resize_size,
+                    resize_mode=tile.resize_mode,
+                    base_image_rgba=base,
+                    transform=tile.transform.copy(),
+                )
+            )
+        self.settings = settings
+        self.tiles = resized
+
+    def reprocess_tiles(self, source_image: Image.Image) -> None:
+        rebuilt: list[TileItem] = []
+        bucket = self.settings.bucket_settings()
+        for tile in self.tiles:
+            crop_rect = clamp_crop_rect(source_image, tile.source_rect)
+            base, _image = process_crop_to_bucket(source_image, crop_rect, self.settings)
+            image = render_tile_transform(base, bucket, tile.transform)
+            rebuilt.append(
+                TileItem(
+                    name=tile.name,
+                    source_rect=crop_rect,
+                    source_size=(crop_rect[2], crop_rect[3]),
+                    final_size=(bucket.tile_width, bucket.tile_height),
+                    image_rgba=image,
+                    tile_id=tile.tile_id,
+                    source_revision_id=tile.source_revision_id,
+                    source_type=tile.source_type,
+                    source_frame_index=tile.source_frame_index,
+                    source_timestamp_ms=tile.source_timestamp_ms,
+                    source_path=tile.source_path,
+                    resize_size=tile.resize_size,
+                    resize_mode=tile.resize_mode,
+                    base_image_rgba=base,
+                    transform=tile.transform.copy(),
                 )
             )
         self.tiles = rebuilt
@@ -197,6 +251,7 @@ class ProjectModel:
         frame_processor: Callable[[Image.Image, TileItem], Image.Image] | None = None,
     ) -> None:
         rebuilt: list[TileItem] = []
+        bucket = self.settings.bucket_settings()
         for tile in self.tiles:
             if tile.source_type != "video" or tile.source_frame_index is None:
                 rebuilt.append(tile)
@@ -211,13 +266,15 @@ class ProjectModel:
             resize_settings = None
             if tile.resize_size is not None and tile.resize_mode is not None:
                 resize_settings = FrameResizeSettings(*tile.resize_size, mode=tile.resize_mode).validated()
+            base, _image = process_crop_with_resize_to_bucket(frame, crop_rect, self.settings, resize_settings)
+            image = render_tile_transform(base, bucket, tile.transform)
             rebuilt.append(
                 TileItem(
                     name=tile.name,
                     source_rect=crop_rect,
                     source_size=(crop_rect[2], crop_rect[3]),
-                    final_size=(self.settings.tile_width, self.settings.tile_height),
-                    image_rgba=process_crop_with_resize(frame, crop_rect, self.settings, resize_settings),
+                    final_size=(bucket.tile_width, bucket.tile_height),
+                    image_rgba=image,
                     tile_id=tile.tile_id,
                     source_revision_id=tile.source_revision_id,
                     source_type="video",
@@ -226,6 +283,8 @@ class ProjectModel:
                     source_path=tile.source_path,
                     resize_size=tile.resize_size,
                     resize_mode=tile.resize_mode,
+                    base_image_rgba=base,
+                    transform=tile.transform.copy(),
                 )
             )
         self.tiles = rebuilt
@@ -247,6 +306,7 @@ class ProjectModel:
             and tile.source_frame_index is not None
         }
         pending: list[TileItem] = []
+        bucket = self.settings.bucket_settings()
         for ref, frame in sorted(frames, key=lambda pair: pair[0].index):
             frame_key = (source_path, ref.index)
             if frame_key in existing_indices:
@@ -256,13 +316,13 @@ class ProjectModel:
             resize_settings = (resize_settings_by_frame or {}).get(ref.index)
             if resize_settings is not None:
                 resize_settings.validated()
-            image = process_crop_with_resize(frame, normalized_rect, self.settings, resize_settings)
+            base, image = process_crop_with_resize_to_bucket(frame, normalized_rect, self.settings, resize_settings)
             pending.append(
                 TileItem(
                     name=f"frame_{ref.index:04d}",
                     source_rect=normalized_rect,
                     source_size=(normalized_rect[2], normalized_rect[3]),
-                    final_size=(self.settings.tile_width, self.settings.tile_height),
+                    final_size=(bucket.tile_width, bucket.tile_height),
                     image_rgba=image,
                     source_type="video",
                     source_frame_index=ref.index,
@@ -272,6 +332,7 @@ class ProjectModel:
                     if resize_settings is not None
                     else None,
                     resize_mode=resize_settings.mode if resize_settings is not None else None,
+                    base_image_rgba=base,
                 )
             )
             existing_indices.add(frame_key)
@@ -280,7 +341,7 @@ class ProjectModel:
 
     def to_project_data(self) -> dict[str, object]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "source_type": self.source_type,
             "source_image_path": self.source_image_path,
             "video_metadata": self.video_metadata,
@@ -298,6 +359,7 @@ class ProjectModel:
                     "source_path": tile.source_path,
                     "resize_size": list(tile.resize_size) if tile.resize_size is not None else None,
                     "resize_mode": tile.resize_mode,
+                    "transform": tile.transform.to_dict(),
                 }
                 for tile in self.tiles
             ],
@@ -340,3 +402,10 @@ class ProjectModel:
             if isinstance(resize_size, (list, tuple)) and len(resize_size) == 2:
                 item.resize_size = (int(resize_size[0]), int(resize_size[1]))
             item.resize_mode = str(tile_data.get("resize_mode")) if tile_data.get("resize_mode") else None
+            item.transform = TileTransform.from_dict(tile_data.get("transform"))
+            item.image_rgba = render_tile_transform(
+                item.base_image_rgba,
+                self.settings.bucket_settings(),
+                item.transform,
+            )
+            item.final_size = item.image_rgba.size

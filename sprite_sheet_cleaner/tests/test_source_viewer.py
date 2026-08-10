@@ -6,10 +6,12 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QPointF
+    from PySide6.QtCore import QPointF, Qt
     from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     from sprite_sheet_cleaner.app.widgets.source_viewer import SourceViewer
+    from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
 except ImportError:
     QApplication = None
     SourceViewer = None
@@ -84,6 +86,123 @@ class SourceViewerTests(unittest.TestCase):
         viewer._set_grid_origin((5, 0))
 
         self.assertEqual(viewer.selected_grid_rects(), [])
+
+    def test_rotate_overlay_only_appears_in_rotate_tool(self) -> None:
+        viewer = SourceViewer()
+        viewer.set_image(QImage(40, 30, QImage.Format_RGBA8888))
+        viewer.set_tile_transform(TileTransform(angle_degrees=15))
+
+        viewer.set_tool("rotate")
+        self.assertTrue(viewer._transform_outline_item.isVisible())
+        self.assertTrue(all(handle.isVisible() for handle in viewer._transform_handles))
+
+        viewer.set_tool("select")
+        self.assertFalse(viewer._transform_outline_item.isVisible())
+
+    def test_rotate_overlay_hit_tests_corner_ring_and_pivot(self) -> None:
+        viewer = SourceViewer()
+        viewer.set_image(QImage(40, 40, QImage.Format_RGBA8888))
+        viewer.set_tool("rotate")
+        viewer.set_tile_transform(TileTransform())
+        points, pivot = viewer._transform_geometry()
+
+        self.assertEqual(viewer._transform_hit_test(points[0]), "rotate")
+        self.assertEqual(viewer._transform_hit_test(pivot), "pivot")
+        self.assertEqual(
+            viewer._transform_hit_test(QPointF(pivot.x() + 18 / viewer._zoom, pivot.y())),
+            "rotate",
+        )
+
+    def test_rotate_clipping_warning_uses_visible_content_bounds(self) -> None:
+        viewer = SourceViewer()
+        viewer.set_image(QImage(40, 40, QImage.Format_RGBA8888))
+        viewer.set_tool("rotate")
+
+        viewer.set_tile_transform(TileTransform(angle_degrees=45), (15, 15, 25, 25))
+
+        self.assertEqual(viewer._transform_outline_item.pen().color().name(), "#ffb347")
+        self.assertNotIn("clipped", viewer._transform_angle_item.text())
+
+    def test_center_ring_drag_emits_live_rotation_preview(self) -> None:
+        viewer = SourceViewer()
+        viewer.resize(600, 480)
+        viewer.set_image(QImage(100, 100, QImage.Format_RGBA8888))
+        viewer.set_tool("rotate")
+        viewer.set_tile_transform(TileTransform())
+        viewer.show()
+        self.app.processEvents()
+        emitted = []
+        viewer.tileTransformPreviewChanged.connect(emitted.append)
+        viewer.tileTransformPreviewChanged.connect(
+            lambda transform: viewer.set_tile_transform(transform, preserve_drag=True)
+        )
+        _points, pivot = viewer._transform_geometry()
+        radius = 18 / viewer._zoom
+        start = viewer.mapFromScene(QPointF(pivot.x() + radius, pivot.y()))
+        middle = viewer.mapFromScene(QPointF(pivot.x() + radius * 0.5, pivot.y() + radius * 0.866))
+        end = viewer.mapFromScene(QPointF(pivot.x(), pivot.y() + radius))
+
+        QTest.mousePress(viewer.viewport(), Qt.LeftButton, pos=start)
+        QTest.mouseMove(viewer.viewport(), middle)
+        QTest.mouseMove(viewer.viewport(), end)
+        QTest.mouseRelease(viewer.viewport(), Qt.LeftButton, pos=end)
+
+        self.assertGreaterEqual(len(emitted), 2)
+        self.assertAlmostEqual(emitted[-1].angle_degrees, 90.0, delta=2.0)
+
+    def test_rotate_drag_continues_after_preview_feedback(self) -> None:
+        viewer = SourceViewer()
+        viewer.resize(600, 480)
+        viewer.set_image(QImage(100, 100, QImage.Format_RGBA8888))
+        viewer.set_tool("rotate")
+        viewer.set_tile_transform(TileTransform())
+        viewer.show()
+        self.app.processEvents()
+        emitted = []
+        viewer.tileTransformPreviewChanged.connect(emitted.append)
+        viewer.tileTransformPreviewChanged.connect(
+            lambda transform: viewer.set_tile_transform(transform, preserve_drag=True)
+        )
+        _points, pivot = viewer._transform_geometry()
+        radius = 18 / viewer._zoom
+        start = viewer.mapFromScene(QPointF(pivot.x() + radius, pivot.y()))
+        middle = viewer.mapFromScene(QPointF(pivot.x() - radius, pivot.y()))
+        end = viewer.mapFromScene(QPointF(pivot.x(), pivot.y() - radius))
+
+        QTest.mousePress(viewer.viewport(), Qt.LeftButton, pos=start)
+        QTest.mouseMove(viewer.viewport(), middle)
+        QTest.mouseMove(viewer.viewport(), end)
+        QTest.mouseRelease(viewer.viewport(), Qt.LeftButton, pos=end)
+
+        self.assertGreaterEqual(len(emitted), 2)
+        self.assertAlmostEqual(emitted[-1].angle_degrees, -90.0, delta=2.0)
+
+    def test_pivot_drag_continues_after_preview_feedback(self) -> None:
+        viewer = SourceViewer()
+        viewer.resize(600, 480)
+        viewer.set_image(QImage(100, 100, QImage.Format_RGBA8888))
+        viewer.set_tool("rotate")
+        viewer.set_tile_transform(TileTransform())
+        viewer.show()
+        self.app.processEvents()
+        emitted = []
+        viewer.tileTransformPreviewChanged.connect(emitted.append)
+        viewer.tileTransformPreviewChanged.connect(
+            lambda transform: viewer.set_tile_transform(transform, preserve_drag=True)
+        )
+        _points, pivot = viewer._transform_geometry()
+        start = viewer.mapFromScene(pivot)
+        middle = viewer.mapFromScene(QPointF(60, 55))
+        end = viewer.mapFromScene(QPointF(70, 65))
+
+        QTest.mousePress(viewer.viewport(), Qt.LeftButton, pos=start)
+        QTest.mouseMove(viewer.viewport(), middle)
+        QTest.mouseMove(viewer.viewport(), end)
+        QTest.mouseRelease(viewer.viewport(), Qt.LeftButton, pos=end)
+
+        self.assertGreaterEqual(len(emitted), 2)
+        self.assertAlmostEqual(emitted[-1].pivot_x, 0.7, delta=0.03)
+        self.assertAlmostEqual(emitted[-1].pivot_y, 0.65, delta=0.03)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,12 @@
       "path": "video-workflow.md"
     },
     {
+      "id": "bucket-transforms",
+      "title": "Bucket Size and Tile Transforms",
+      "description": "Separate source/output sizing, resize modes, and interactive bucket rotation.",
+      "path": "bucket-transforms.md"
+    },
+    {
       "id": "keyboard-shortcuts",
       "title": "Keyboard Shortcuts",
       "description": "Fast controls for selection, navigation, editing, and help.",

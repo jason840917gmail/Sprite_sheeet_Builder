@@ -2,6 +2,8 @@
 
 Sprite Sheet Cleaner is a desktop tool for cleaning messy AI-generated sprite sheets. It helps you place fixed-size tile selections over a source sheet, remove a solid background color when needed, collect cleaned tiles in a bucket, and export a final aligned sprite sheet PNG.
 
+Source selection dimensions can differ from bucket/output dimensions, so a `256 x 256` source cell can automatically become a `64 x 64` exported tile. Bucket tiles can also be scaled and rotated interactively with undoable on-canvas transforms.
+
 ## Useful Commands
 
 Run these from the workspace root:

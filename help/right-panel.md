@@ -27,7 +27,29 @@ The right side of the window is organized from source processing to output revie
 
 ## Image or Video Tool
 
-Image mode controls tile dimensions, selection grids, background removal, trimming, scaling, padding, anchor, and final sheet rows/columns. Video mode replaces those controls with frame range, sampling, output sizing, resize mode, and animation settings.
+Image mode separates **Source selection** dimensions from **Bucket / output tile** dimensions. Select and Grid use the source size; every bucket tile, animation frame, sheet cell, individual export, and metadata rectangle uses the bucket size.
+
+- **On Add resize** controls how source content enters the fixed bucket canvas: No Scale, Fit Down Only, Fit, Fill/Crop, or Stretch.
+- **Resampling** chooses Smooth for painted/high-resolution assets or Nearest for pixel art.
+- Changing the bucket dimensions resizes every existing bucket tile together and can be undone.
+- A per-tile scale changes content inside the fixed bucket canvas. It never creates a differently sized sheet cell.
+
+Video mode uses its shared frame output size as the bucket/output canvas and keeps the same fixed-size sheet rule.
+
+## Bucket Tile Transform
+
+Choose **Rotate** (`R`) with a bucket tile selected to open the transform panel.
+
+- Drag an orange corner or the orange center ring to rotate around the pivot.
+- Drag the blue center dot to move the pivot.
+- Hold **Shift** while rotating to snap to 15-degree steps.
+- Scale X/Y resizes the tile content inside the fixed output canvas. Link X/Y for uniform scaling.
+- Use the numeric angle or the `-90`, `+90`, and `180` quick actions for exact turns.
+- **Fit Rotated** reduces scale enough to keep the rotated visible content inside the output canvas.
+- A red outline and `clipped` label warn that content crosses the output boundary.
+- **Apply Transform** or Enter commits one undoable change. **Cancel** or Esc restores the exact committed tile.
+
+Transforms use transparent fixed-size canvases. Entering Paint Cleanup on a transformed bucket tile bakes the committed appearance first, then makes each stroke undoable as usual.
 
 ## Paint Cleanup
 
@@ -42,7 +64,7 @@ Choose the **Paint** tool (`B`) to finish an imperfect removal without changing 
 
 ## Bucket
 
-The bucket is the ordered list of tiles that will be written to the sheet. Drag to reorder animation frames, or use the buttons to rename, duplicate, move, delete, and clear. **Undo** and **Redo** restore bucket snapshots, including video frame metadata.
+The bucket is the ordered list of fixed-output-size tiles that will be written to the sheet. Each row shows its source crop and final output dimensions. Drag to reorder animation frames, or use the buttons to rename, duplicate, move, delete, and clear. **Undo** and **Redo** restore pixels, transforms, output-size changes, and video frame metadata.
 
 ## Final Tilesheet Preview
 

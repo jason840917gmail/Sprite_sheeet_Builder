@@ -14,6 +14,7 @@ try:
     from PySide6.QtWidgets import QApplication, QMessageBox
     from sprite_sheet_cleaner.app.main_window import MainWindow
     from sprite_sheet_cleaner.app.models.app_settings import AppSettings
+    from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
     from sprite_sheet_cleaner.app.utils.qimage_converter import pil_to_qimage
 except ImportError:
     QApplication = None
@@ -36,6 +37,7 @@ class MainWindowTests(unittest.TestCase):
             self.assertFalse(window.select_action.icon().isNull())
             self.assertFalse(window.grid_action.icon().isNull())
             self.assertFalse(window.retouch_action.icon().isNull())
+            self.assertFalse(window.rotate_action.icon().isNull())
         finally:
             window.close()
 
@@ -223,6 +225,108 @@ class MainWindowTests(unittest.TestCase):
 
             self.assertNotIn("Overflow:", window.final_preview.info_label.text())
             self.assertTrue(window.settings_panel.add_button.isEnabled())
+        finally:
+            window.close()
+
+    def test_bucket_output_resize_is_independent_and_undoable(self) -> None:
+        window = MainWindow()
+        try:
+            image = Image.new("RGBA", (4, 4), (255, 0, 0, 255))
+            window.source_image = image
+            window.model.settings = AppSettings(
+                tile_width=4,
+                tile_height=4,
+                bucket_tile_width=4,
+                bucket_tile_height=4,
+                bucket_resize_mode="fit",
+                remove_background=False,
+                edge_bleed=0,
+            ).validated()
+            window.settings_panel.set_settings(window.model.settings)
+            window.model.add_tile_from_crop(image, (0, 0, 4, 4))
+            window._refresh_all(selected_index=0)
+
+            window.settings_panel.bucket_tile_width.setValue(2)
+
+            self.assertEqual((window.model.settings.tile_width, window.model.settings.tile_height), (4, 4))
+            self.assertEqual(
+                (window.model.settings.bucket_tile_width, window.model.settings.bucket_tile_height),
+                (2, 2),
+            )
+            self.assertEqual(window.model.tiles[0].image_rgba.size, (2, 2))
+
+            window._undo_bucket()
+
+            self.assertEqual(
+                (window.model.settings.bucket_tile_width, window.model.settings.bucket_tile_height),
+                (4, 4),
+            )
+            self.assertEqual(window.model.tiles[0].image_rgba.size, (4, 4))
+        finally:
+            window.close()
+
+    def test_rotate_tool_stages_apply_and_undo(self) -> None:
+        window = MainWindow()
+        try:
+            image = Image.new("RGBA", (5, 5), (0, 0, 0, 0))
+            image.putpixel((3, 2), (255, 0, 0, 255))
+            window.source_image = image
+            window.model.settings = AppSettings(
+                tile_width=5,
+                tile_height=5,
+                bucket_tile_width=5,
+                bucket_tile_height=5,
+                bucket_resize_mode="none",
+                remove_background=False,
+                edge_bleed=0,
+            ).validated()
+            window.model.add_tile_from_crop(image, (0, 0, 5, 5))
+            window._refresh_all(selected_index=0)
+
+            window._set_viewer_tool("rotate")
+            window._tile_transform_preview_changed(
+                TileTransform(angle_degrees=90, resample_mode="nearest")
+            )
+
+            self.assertEqual(window.source_viewer.current_tool(), "rotate")
+            self.assertEqual(window.model.tiles[0].transform.angle_degrees, 0.0)
+            self.assertTrue(window._transform_dirty)
+
+            window._apply_tile_transform()
+
+            self.assertEqual(window.model.tiles[0].transform.angle_degrees, 90.0)
+            self.assertEqual(window.model.tiles[0].image_rgba.getpixel((2, 3)), (255, 0, 0, 255))
+
+            window._undo_bucket()
+            self.assertEqual(window.model.tiles[0].transform.angle_degrees, 0.0)
+        finally:
+            window.close()
+
+    def test_fit_rotated_content_prevents_full_canvas_clipping(self) -> None:
+        window = MainWindow()
+        try:
+            image = Image.new("RGBA", (20, 20), (255, 255, 255, 255))
+            window.source_image = image
+            window.model.settings = AppSettings(
+                tile_width=20,
+                tile_height=20,
+                bucket_tile_width=20,
+                bucket_tile_height=20,
+                bucket_resize_mode="none",
+                remove_background=False,
+                edge_bleed=0,
+            ).validated()
+            window.model.add_tile_from_crop(image, (0, 0, 20, 20))
+            window._refresh_all(selected_index=0)
+            window._set_viewer_tool("rotate")
+            window._tile_transform_preview_changed(TileTransform(angle_degrees=45))
+
+            self.assertTrue(window._transform_is_clipped(window.model.tiles[0], window._transform_working))
+
+            window._fit_rotated_content()
+
+            self.assertAlmostEqual(window._transform_working.scale_x, 2 ** -0.5, places=5)
+            self.assertFalse(window._transform_is_clipped(window.model.tiles[0], window._transform_working))
         finally:
             window.close()
 

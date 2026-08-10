@@ -59,7 +59,8 @@ class FinalPreview(QWidget):
         overflow = max(0, tile_count - capacity)
         overflow_text = f" | Overflow: {overflow}" if overflow else ""
         self.info_label.setText(
-            f"Tile: {settings.tile_width}x{settings.tile_height} | "
+            f"Selection: {settings.tile_width}x{settings.tile_height} | "
+            f"Bucket tile: {settings.bucket_tile_width}x{settings.bucket_tile_height} | "
             f"Final tilesheet: {settings.sheet_columns}x{settings.sheet_rows} | "
             f"Output: {width}x{height} | "
             f"Tiles: {tile_count}/{capacity} | "

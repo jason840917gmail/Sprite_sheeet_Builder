@@ -8,7 +8,10 @@ from sprite_sheet_cleaner.app.models.tile_item import TileItem
 
 def sheet_dimensions(settings: AppSettings) -> tuple[int, int]:
     settings.validated()
-    return settings.tile_width * settings.sheet_columns, settings.tile_height * settings.sheet_rows
+    return (
+        int(settings.bucket_tile_width) * settings.sheet_columns,
+        int(settings.bucket_tile_height) * settings.sheet_rows,
+    )
 
 
 def sheet_capacity(settings: AppSettings) -> int:
@@ -31,9 +34,16 @@ def build_sheet(
     for index, tile in enumerate(tiles[:capacity]):
         row = index // settings.sheet_columns
         column = index % settings.sheet_columns
-        x = column * settings.tile_width
-        y = row * settings.tile_height
+        bucket_width = int(settings.bucket_tile_width)
+        bucket_height = int(settings.bucket_tile_height)
+        x = column * bucket_width
+        y = row * bucket_height
         image = tile.image_rgba.convert("RGBA")
+        if image.size != (bucket_width, bucket_height):
+            raise ValueError(
+                f"Tile {tile.name!r} is {image.width}x{image.height}; "
+                f"the bucket requires {bucket_width}x{bucket_height}."
+            )
         sheet.paste(image, (x, y))
 
     return sheet

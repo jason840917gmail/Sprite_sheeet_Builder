@@ -33,6 +33,7 @@ class SettingsPanel(QWidget):
         self._background_color = (255, 0, 255)
         self._updating = False
         self._last_tile_dimension = "width"
+        self._last_bucket_dimension = "width"
         self._tile_job_running = False
 
         self.tile_width = self._spin(1, 4096, 256)
@@ -44,6 +45,15 @@ class SettingsPanel(QWidget):
         self.lock_tile_aspect = QCheckBox("Sym")
         self.lock_tile_aspect.setChecked(True)
         self.lock_tile_aspect.setToolTip("Sym")
+        self.bucket_tile_width = self._spin(1, 4096, 256)
+        self.bucket_tile_height = self._spin(1, 4096, 256)
+        self.bucket_tile_width.setMaximumWidth(88)
+        self.bucket_tile_height.setMaximumWidth(88)
+        self.bucket_tile_width.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.bucket_tile_height.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.lock_bucket_aspect = QCheckBox("Sym")
+        self.lock_bucket_aspect.setChecked(True)
+        self.lock_bucket_aspect.setToolTip("Link bucket output width and height")
         self.selection_columns = self._spin(1, 128, 1)
         self.selection_rows = self._spin(1, 128, 1)
         self.selection_columns.setMaximumWidth(72)
@@ -83,11 +93,18 @@ class SettingsPanel(QWidget):
         self.tolerance_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.trim_transparent = QCheckBox()
         self.trim_transparent.setChecked(False)
-        self.scale_mode = QComboBox()
-        self.scale_mode.addItem("None", "none")
-        self.scale_mode.addItem("Scale down only", "scale_down_only")
-        self.scale_mode.addItem("Scale to fit", "scale_to_fit")
-        self.scale_mode.setCurrentIndex(0)
+        self.bucket_resize_mode = QComboBox()
+        self.bucket_resize_mode.addItem("No Scale", "none")
+        self.bucket_resize_mode.addItem("Fit Down Only", "fit_down_only")
+        self.bucket_resize_mode.addItem("Fit", "fit")
+        self.bucket_resize_mode.addItem("Fill / Crop", "fill")
+        self.bucket_resize_mode.addItem("Stretch", "stretch")
+        self.bucket_resize_mode.setCurrentIndex(self.bucket_resize_mode.findData("fit"))
+        self.bucket_resize_mode.setToolTip("How source content is normalized when it enters the bucket")
+        self.bucket_resample_mode = QComboBox()
+        self.bucket_resample_mode.addItem("Smooth", "smooth")
+        self.bucket_resample_mode.addItem("Nearest (pixel art)", "nearest")
+        self.scale_mode = self.bucket_resize_mode
         self.padding = self._spin(0, 512, 0)
         self.anchor = QComboBox()
         self.anchor.addItem("Center", "center")
@@ -109,6 +126,14 @@ class SettingsPanel(QWidget):
         tile_size_row.addWidget(self.lock_tile_aspect)
         tile_size_row.addWidget(self.tile_height)
         tile_size_row.addStretch(1)
+
+        bucket_size_row = QHBoxLayout()
+        bucket_size_row.setContentsMargins(0, 0, 0, 0)
+        bucket_size_row.setSpacing(6)
+        bucket_size_row.addWidget(self.bucket_tile_width)
+        bucket_size_row.addWidget(self.lock_bucket_aspect)
+        bucket_size_row.addWidget(self.bucket_tile_height)
+        bucket_size_row.addStretch(1)
 
         self.selection_grid_field = QWidget()
         selection_grid_row = QHBoxLayout(self.selection_grid_field)
@@ -152,14 +177,16 @@ class SettingsPanel(QWidget):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        form.addRow("Tile / selection size", tile_size_row)
+        form.addRow("Source selection", tile_size_row)
+        form.addRow("Bucket / output tile", bucket_size_row)
         form.addRow("Selection grid", self.selection_grid_field)
         self._selection_grid_label = form.labelForField(self.selection_grid_field)
         form.addRow("Remove background", tile_background_row)
         form.addRow("Background color", color_row)
         form.addRow("Tolerance", tolerance_row)
         form.addRow("Trim transparent", self.trim_transparent)
-        form.addRow("Scale mode", self.scale_mode)
+        form.addRow("On Add resize", self.bucket_resize_mode)
+        form.addRow("Resampling", self.bucket_resample_mode)
         form.addRow("Padding", self.padding)
         form.addRow("Anchor", self.anchor)
 
@@ -187,10 +214,20 @@ class SettingsPanel(QWidget):
         self.set_action_context("select", False, 0, 64)
 
     def settings(self) -> AppSettings:
+        resize_mode = self.bucket_resize_mode.currentData()
+        legacy_scale_mode = {
+            "none": "none",
+            "fit_down_only": "scale_down_only",
+        }.get(resize_mode, "scale_to_fit")
         settings = AppSettings(
             tile_width=self.tile_width.value(),
             tile_height=self.tile_height.value(),
             lock_tile_aspect=self.lock_tile_aspect.isChecked(),
+            bucket_tile_width=self.bucket_tile_width.value(),
+            bucket_tile_height=self.bucket_tile_height.value(),
+            lock_bucket_aspect=self.lock_bucket_aspect.isChecked(),
+            bucket_resize_mode=resize_mode,
+            bucket_resample_mode=self.bucket_resample_mode.currentData(),
             selection_columns=self.selection_columns.value(),
             selection_rows=self.selection_rows.value(),
             sheet_columns=self.sheet_columns.value(),
@@ -201,7 +238,7 @@ class SettingsPanel(QWidget):
             background_color=self._background_color,
             tolerance=self.tolerance_spin.value(),
             trim_transparent=self.trim_transparent.isChecked(),
-            scale_mode=self.scale_mode.currentData(),
+            scale_mode=legacy_scale_mode,
             padding=self.padding.value(),
             anchor=self.anchor.currentData(),
         ).validated()
@@ -213,6 +250,9 @@ class SettingsPanel(QWidget):
         self.tile_width.setValue(settings.tile_width)
         self.tile_height.setValue(settings.tile_height)
         self.lock_tile_aspect.setChecked(settings.lock_tile_aspect)
+        self.bucket_tile_width.setValue(int(settings.bucket_tile_width))
+        self.bucket_tile_height.setValue(int(settings.bucket_tile_height))
+        self.lock_bucket_aspect.setChecked(settings.lock_bucket_aspect)
         self.selection_columns.setValue(settings.selection_columns)
         self.selection_rows.setValue(settings.selection_rows)
         self.sheet_columns.setValue(settings.sheet_columns)
@@ -225,8 +265,10 @@ class SettingsPanel(QWidget):
         self.tolerance_slider.setValue(settings.tolerance)
         self.tolerance_spin.setValue(settings.tolerance)
         self.trim_transparent.setChecked(settings.trim_transparent)
-        scale_index = self.scale_mode.findData(settings.scale_mode)
-        self.scale_mode.setCurrentIndex(max(scale_index, 0))
+        resize_index = self.bucket_resize_mode.findData(settings.bucket_resize_mode)
+        self.bucket_resize_mode.setCurrentIndex(max(resize_index, 0))
+        resample_index = self.bucket_resample_mode.findData(settings.bucket_resample_mode)
+        self.bucket_resample_mode.setCurrentIndex(max(resample_index, 0))
         self.padding.setValue(settings.padding)
         anchor_index = self.anchor.findData(settings.anchor)
         self.anchor.setCurrentIndex(max(anchor_index, 0))
@@ -333,12 +375,15 @@ class SettingsPanel(QWidget):
 
         self.trim_transparent.toggled.connect(self._emit_settings_changed)
 
-        for control in (self.scale_mode, self.anchor):
+        for control in (self.bucket_resize_mode, self.bucket_resample_mode, self.anchor):
             control.currentIndexChanged.connect(self._emit_settings_changed)
 
         self.tile_width.valueChanged.connect(self._tile_width_changed)
         self.tile_height.valueChanged.connect(self._tile_height_changed)
         self.lock_tile_aspect.toggled.connect(self._tile_lock_toggled)
+        self.bucket_tile_width.valueChanged.connect(self._bucket_width_changed)
+        self.bucket_tile_height.valueChanged.connect(self._bucket_height_changed)
+        self.lock_bucket_aspect.toggled.connect(self._bucket_lock_toggled)
         self.selection_columns.valueChanged.connect(self._selection_grid_changed)
         self.selection_rows.valueChanged.connect(self._selection_grid_changed)
         self.match_sheet_to_grid.toggled.connect(self._sheet_match_toggled)
@@ -374,6 +419,26 @@ class SettingsPanel(QWidget):
             self._sync_tile_dimensions(self._last_tile_dimension, source_value)
         self._emit_settings_changed()
 
+    def _bucket_width_changed(self, value: int) -> None:
+        self._last_bucket_dimension = "width"
+        self._sync_bucket_dimensions("width", value)
+        self._emit_settings_changed()
+
+    def _bucket_height_changed(self, value: int) -> None:
+        self._last_bucket_dimension = "height"
+        self._sync_bucket_dimensions("height", value)
+        self._emit_settings_changed()
+
+    def _bucket_lock_toggled(self, checked: bool) -> None:
+        if checked:
+            source_value = (
+                self.bucket_tile_width.value()
+                if self._last_bucket_dimension == "width"
+                else self.bucket_tile_height.value()
+            )
+            self._sync_bucket_dimensions(self._last_bucket_dimension, source_value)
+        self._emit_settings_changed()
+
     def _selection_grid_changed(self, _value: int) -> None:
         self._emit_settings_changed()
 
@@ -395,6 +460,16 @@ class SettingsPanel(QWidget):
             self.tile_height.setValue(value)
         elif changed == "height" and self.tile_width.value() != value:
             self.tile_width.setValue(value)
+        self._updating = False
+
+    def _sync_bucket_dimensions(self, changed: str, value: int) -> None:
+        if self._updating or not self.lock_bucket_aspect.isChecked():
+            return
+        self._updating = True
+        if changed == "width" and self.bucket_tile_height.value() != value:
+            self.bucket_tile_height.setValue(value)
+        elif changed == "height" and self.bucket_tile_width.value() != value:
+            self.bucket_tile_width.setValue(value)
         self._updating = False
 
     def _emit_settings_changed(self) -> None:

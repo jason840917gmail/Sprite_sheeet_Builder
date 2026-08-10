@@ -20,6 +20,10 @@ def create_retouch_icon(size: int = 24) -> QIcon:
     return _paint_icon(size, _draw_retouch_icon)
 
 
+def create_rotate_icon(size: int = 24) -> QIcon:
+    return _paint_icon(size, _draw_rotate_icon)
+
+
 def create_help_icon(size: int = 24) -> QIcon:
     return _paint_icon(size, _draw_help_icon)
 
@@ -116,6 +120,23 @@ def _draw_retouch_icon(painter: QPainter, rect: QRectF) -> None:
     painter.drawEllipse(QRectF(rect.left() + 3.0, rect.bottom() - 8.0, 6.0, 6.0))
     painter.setBrush(QColor(31, 143, 255, 220))
     painter.drawRoundedRect(QRectF(rect.right() - 9.0, rect.top() + 3.0, 6.0, 6.0), 1.5, 1.5)
+
+
+def _draw_rotate_icon(painter: QPainter, rect: QRectF) -> None:
+    arc_rect = QRectF(rect.left() + 4.5, rect.top() + 4.5, rect.width() - 9.0, rect.height() - 9.0)
+    painter.setPen(QPen(QColor(225, 241, 255, 235), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawArc(arc_rect, 35 * 16, 285 * 16)
+    arrow = QPainterPath()
+    arrow.moveTo(rect.right() - 4.0, rect.top() + 6.0)
+    arrow.lineTo(rect.right() - 10.0, rect.top() + 5.0)
+    arrow.lineTo(rect.right() - 7.0, rect.top() + 11.0)
+    arrow.closeSubpath()
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(255, 159, 47, 235))
+    painter.drawPath(arrow)
+    painter.setBrush(QColor(31, 143, 255, 220))
+    painter.drawEllipse(QRectF(rect.center().x() - 2.0, rect.center().y() - 2.0, 4.0, 4.0))
 
 
 def _draw_help_icon(painter: QPainter, rect: QRectF) -> None:
