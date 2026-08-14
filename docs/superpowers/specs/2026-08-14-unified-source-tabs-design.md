@@ -26,6 +26,8 @@ Opening another source will append a tab instead of replacing the active source 
 - Adding multiple buckets.
 - Adding cloud-backed sources, remote URLs, or collaborative editing.
 - Persisting an unreviewed source-processing candidate across application restarts.
+- Restoring processed source pixels from an external cache after a project restart.
+- Bulk **Locate All** source discovery; the first release relinks one source at a time.
 - Redesigning the established visual theme or the image-processing algorithms.
 
 ## Product model
@@ -78,19 +80,26 @@ find_by_canonical_path(path) -> SourceDocument | None
 open_source_ids() -> list[str]
 ```
 
-The workspace rejects duplicate open canonical paths by activating the existing source. Source identity is persisted and is not derived solely from a mutable path.
+Source identity is a persisted UUID. A canonical path is a locator, not identity. The workspace enforces at most one retained descriptor per canonical path:
 
-Closing a tab removes its ID from visible tab order but retains its source descriptor while any tile references it. Reopening the same canonical source reuses that source ID. Source descriptors with no open tab and no referencing tile may be removed.
+- A matching path and fingerprint activates or reopens the existing source ID.
+- If the path matches but its fingerprint changed, opening stops at a **Source changed** decision. The user may replace the retained source under its existing ID or cancel; the application does not silently merge the files or create a second descriptor for the same path.
+- A relink target already owned by another descriptor is rejected and the owning source is identified. Source merging is not part of this release.
+- Relative-path and case normalization occur before collision checks, using platform-appropriate path comparison.
+
+Closing a tab removes its ID from visible tab order but retains its descriptor for the life of the project. Reopening the same canonical source reuses that source ID. A descriptor is removed only through an explicit **Forget Source** operation, which is available only when the source is closed, no tile references it, and `sheet_match_source_id` does not reference it. Clearing a Grid binding makes an otherwise-unreferenced descriptor eligible for forgetting.
 
 ### Source document boundary
 
-Define a small common document contract rather than forcing image and video implementations into one large class. The shared contract provides identity, path, display metadata, availability, view state, serialization, activation, deactivation, and close-job handling.
+Define a small common state contract rather than forcing image and video implementations into one large class. The shared contract provides identity, path, display metadata, availability, view state, serialization, activation, deactivation, and close-job handling. It contains no QWidget or other UI object so `SourceWorkspace` stays UI-independent.
 
 Concrete units:
 
 - `ImageDocument` owns a `SourceRepository`, the active image, image-source settings, and image viewer state.
-- The existing `VideoDocument` is extended with common identity/view fields and serialization hooks while retaining its frame-browser and video-specific behavior.
+- `VideoDocumentState` owns video metadata, settings, resize overrides, frame references, selection, and current-frame identity. The existing `VideoDocument` is split or adapted so it no longer owns `FrameBrowser`.
 - `MissingSourceDocument` owns serialized state and provenance but no decoded pixels. It supports relinking and safe bucket-only use.
+
+`MainWindow` or a dedicated Qt `SourceViewRegistry` owns each `FrameBrowser`, keyed by source ID. Browser widgets bind to `VideoDocumentState` when created and are destroyed or detached independently of serializable state.
 
 These units do not own the bucket, output settings, command stack, or export pipeline.
 
@@ -119,9 +128,11 @@ Shared output settings contain:
 
 - bucket/output tile width and height;
 - bucket aspect lock;
-- output resampling used by project-wide bucket resize;
+- resize mode, resampling, padding, anchor, and edge bleed used when resizing existing bucket snapshots and rendering bucket transforms;
 - final sheet rows and columns;
 - optional Grid-match source ID.
+
+Resizing existing bucket tiles always operates on their stored editable base snapshots. It never reloads or reprocesses a source. The shared output policy determines how each snapshot is placed onto the new common canvas, and the whole change remains one undoable command.
 
 ### Image-document settings
 
@@ -133,6 +144,8 @@ Each image document retains:
 - trim behavior;
 - on-add resize mode, resampling, padding, anchor, and edge bleed.
 
+Image insertion creates a temporary bucket-normalization policy from the project-wide output dimensions plus this document's on-add policy. It does not mutate shared output policy.
+
 ### Video-document settings
 
 Each video document retains:
@@ -142,9 +155,11 @@ Each video document retains:
 - on-add resize mode, resampling, padding, anchor, and seed-frame count;
 - per-frame resize overrides.
 
-Video frame width/height and image bucket width/height no longer compete as separate final canvas authorities. All additions normalize into the current project-wide bucket size.
+Legacy video `frame_width`, `frame_height`, and `lock_frame_aspect` no longer remain independent final-canvas authorities. All new additions normalize into the current project-wide bucket size and aspect lock. Current video resize mode and anchor migrate to the video's on-add policy; resampling derives from `pixel_art_mode` (`nearest` when true, otherwise `smooth`); video padding defaults to `0`; edge bleed migrates from the legacy project bucket setting.
 
-An implementation may retain `AppSettings` as a compatibility facade during migration, but persisted schema-4 ownership and runtime authority must follow this split.
+For a new project, the first opened source uses the application's current defaults. Every later source copies source-specific defaults from the most recently active document of the same media type, while shared output settings remain unchanged. Opening a project uses only persisted/migrated values.
+
+An implementation may retain `AppSettings` as a compatibility facade during migration, but persisted schema-4 ownership and runtime authority must follow this split. Schema-3 migration copies the legacy bucket resize mode, resampling, padding, anchor, and edge bleed into both the shared existing-snapshot policy and the single source's on-add policy, preserving old behavior without leaving ambiguous ownership.
 
 ### Match final sheet to Grid
 
@@ -185,7 +200,7 @@ The visual treatment follows the existing application. The distinctive multi-sou
 
 ## Bucket provenance and source-scoped behavior
 
-Add a non-null `source_id` to every newly created `TileItem`. Retain `source_path` for diagnostics, export metadata, and schema migration, but use `source_id` for runtime identity.
+Add non-null `source_id` and `source_fingerprint` values to every newly created `TileItem`. Retain `source_path` as immutable creation-time provenance for diagnostics, export metadata, and schema migration, but use `source_id` for runtime identity. Relinking never rewrites a pre-existing tile's recorded path or fingerprint; tiles added after an accepted replacement record the replacement's current path and fingerprint.
 
 Bucket rows show a compact source marker consisting of media icon and abbreviated source filename. The full path appears in a tooltip. Missing and closed sources remain identifiable.
 
@@ -207,14 +222,15 @@ Selecting a bucket tile whose source is not open previews its stored snapshot. S
 
 Closing a tab never removes bucket tiles.
 
-Before close:
+Close follows a transactional sequence:
 
-- cancel and settle active jobs owned by that source;
-- reject late results using the document generation;
-- warn if an unreviewed candidate would be discarded;
-- preserve serializable settings, provenance, and view state.
+1. If an unreviewed candidate exists, ask **Cancel** or **Discard and Close** before mutating any state.
+2. **Cancel** leaves the tab, candidate, jobs, active source, and tab order unchanged.
+3. After **Discard and Close**, mark the tab as `closing`, disable its source actions, invalidate its job generation, and request cancellation of jobs owned by that source.
+4. Complete the close only after every owned job emits one terminal signal. Candidate discard and pixel/cache release happen at this commit point.
+5. If cancellation reports failure or does not settle within five seconds, abort the close, restore the tab to usable state, keep the candidate, and report that the job must finish or be cancelled before closing. The UI must not block while waiting.
 
-Large decoded images, video frame caches, and revision pixels may then be released. Reopening reloads the original file and restores serialized state. An active processed revision is restored from its recorded recipe/cache entry when available; otherwise the original opens with a clear **Processing must be rerun** state. Bucket snapshots remain unchanged.
+Large decoded images, video frame caches, and revision pixels may then be released. Reopening reloads the original file and restores serialized settings/view state. The last active processing recipe is restored as control values only; the source opens on its immutable original with **Processing must be rerun** until the user runs it again. Bucket snapshots remain unchanged.
 
 ## Asynchronous job safety
 
@@ -227,9 +243,18 @@ Every source job carries:
 
 Completion, failure, cancellation, and progress handlers apply updates only when all ownership values still match. Switching tabs does not cancel a job. Closing, relinking, or replacing a source invalidates its generation and cancels its jobs.
 
-For the first implementation, allow at most one source-processing inference job and one bucket-tile inference job project-wide. This preserves current optional-runtime and GPU ownership rules. The owning tab displays progress even when inactive; activating it reveals full status and cancellation controls.
+For the first implementation, one project-wide processing-mutation slot permits either a source-processing job or a bucket-tile inference job, never both. This preserves optional-runtime/GPU ownership and gives the non-concurrency rule one meaning. Video decoding/thumbnail extraction uses separate per-video workers because it does not use an optional inference runtime or mutate the bucket.
 
-A result for an inactive but still-valid document is stored on that document and marks its tab. A stale result must not change the active viewer, controls, candidate, bucket, or progress button.
+A valid source-processing result for an inactive document is stored on that document and marks its tab. It does not change the active viewer.
+
+A bucket-tile inference job is a different transaction:
+
+- capture the owning source ID/generation, source fingerprint, target tile IDs or pending crop, bucket revision, and command-stack revision;
+- disable all bucket-mutating actions until the job reaches one terminal state, while allowing tab switches, viewing, and cancellation;
+- on success, verify every captured ownership/revision value and apply exactly one bucket command;
+- on mismatch, discard the result without changing the bucket or undo stack.
+
+A stale result of either kind must not change another document, the active viewer, controls, candidate, bucket, undo history, or progress button.
 
 ## Project schema and persistence
 
@@ -244,9 +269,11 @@ Representative manifest shape:
     {
       "source_id": "e154...",
       "source_type": "image",
-      "path": "sources/character.png",
+      "original_path": "sources/character.png",
+      "current_path": "sources/character.png",
       "display_name": "character.png",
-      "fingerprint": "sha256...",
+      "original_fingerprint": "sha256...",
+      "current_fingerprint": "sha256...",
       "source_size": [1024, 1024],
       "open": true,
       "tab_order": 0,
@@ -262,6 +289,7 @@ Representative manifest shape:
     {
       "tile_id": "8e40...",
       "source_id": "e154...",
+      "source_fingerprint": "sha256...",
       "source_type": "image",
       "source_path": "sources/character.png",
       "source_rect": [0, 0, 256, 256]
@@ -277,35 +305,66 @@ Persistence rules:
 - Continue embedding exact bucket/base tile snapshots in `.sscproj`.
 - Persist all source descriptors referenced by an open tab or bucket tile.
 - Persist open/closed state, visible tab order, active source, source settings, and serializable view state.
-- Do not serialize an unreviewed candidate; warn before save and allow the user to return to it or save without it.
-- Retain active processing recipe metadata and cache identity, but do not claim a revision is restored unless its pixels are available and fingerprint validation succeeds.
+- If any image has an unreviewed candidate, saving lists the affected tabs and asks **Cancel** or **Save without candidates**. Saving without candidates does not discard them from the running session; it only omits them from the archive.
+- Retain the last active processing recipe as control/preset metadata, not as a restored active revision. Processed source pixels and external cache identity are not part of schema 4.
 - Treat `.sscproj` as the primary mixed-source format. Legacy JSON remains importable but is not the recommended authoring format.
+
+Schema invariants:
+
+| Field | Invariant |
+|---|---|
+| `sources` | List of objects with unique, non-empty `source_id` values. |
+| Source paths | `current_path` is nullable only for an unresolved source. Resolved canonical paths are unique across descriptors. `original_path` is retained for provenance. |
+| Fingerprints | `original_fingerprint` never changes. `current_fingerprint` changes only after exact relink or explicit accepted replacement. |
+| `open` / `tab_order` | Open sources have distinct dense integer orders `0..n-1`. Closed sources have `tab_order: null`. |
+| `active_source_id` | Null exactly when no source is open; otherwise references an open source. |
+| `sheet_match_source_id` | Null or references an image descriptor. It may reference a closed/missing image, in which case matching is paused. |
+| Source settings | Discriminated and validated by `source_type`; image and video payloads cannot be interchanged. |
+| `view_state` | Contains only serializable coordinates, tool IDs, selections, and Grid state. Loader clamps geometry to a successfully loaded source and clears invalid geometry. |
+| Tiles | Every tile references an existing descriptor and carries immutable creation-time source type, path, and fingerprint. |
+
+Persisted video state includes metadata needed for validation, sampling controls, extracted frame references, selected frame indices, current frame index, source-processing controls, seed count, and resize overrides. Thumbnail pixels, decoded-frame caches, workers, cancellation tokens, progress, and `FrameBrowser` widgets are ephemeral and are rebuilt after load.
+
+Persisted image state includes selection dimensions/matrix, valid selection and Grid geometry, tool ID, zoom/pan, source-processing controls, and last active recipe preset. Original/active/candidate pixels, jobs, progress, and paint stroke working buffers are ephemeral.
 
 Archive validation must accept only the existing project manifest and tile snapshot entries unless a later explicitly specified feature adds embedded sources. Existing entry-count, byte, pixel, traversal, and atomic-save protections remain in force.
 
+Legacy JSON saving remains available only for a compatible single-source session. When more than one descriptor is open or referenced, the legacy save option is disabled with guidance to use `.sscproj`. Legacy JSON remains importable.
+
 ## Migration
 
-Schema-2 and schema-3 migration produces schema-4 runtime data before models are populated.
+Schema-2 and schema-3 migration produces schema-4 runtime data before models are populated. Migration first identifies the container because snapshot archives and source-dependent JSON have different guarantees.
+
+| Input | Tile pixels | Source requirement | Pixel guarantee |
+|---|---|---|---|
+| Schema-2/3 `.sscproj` | Embedded base snapshots | Sources may be missing | Embedded tile pixels remain byte-equivalent after decode/encode-independent in-memory loading; migration does not rerender them. |
+| Current video JSON/collection | No complete portable snapshot guarantee | Every referenced video required for source-dependent reconstruction | Existing validated frame/crop processing path is used. |
+| Legacy image JSON | No snapshots | Referenced image required | Existing `legacy_v1_renderer` behavior is preserved; output depends on the located source matching the saved project. |
 
 ### Existing image project
 
 - Create one image source from `source_image_path`.
 - Assign a generated stable source ID.
-- Map every image tile to that source unless a valid tile path identifies another legacy source.
+- Map every image tile to that source. Existing image schemas never authoritatively declared multiple image documents, so a stray tile path does not create an implicit source.
 - Split legacy `AppSettings` into source settings and shared output settings without changing rendered tile size.
 
 ### Existing video project
 
 - Create one video source from the legacy source path and video settings.
 - Map every video tile to it.
+- Derive shared bucket dimensions from validated embedded snapshot dimensions for `.sscproj`; otherwise use validated root output settings, falling back to the video target size only when root output geometry is absent.
+- Map legacy frame aspect lock to shared bucket aspect lock only when root output settings do not provide it.
 
 ### Existing video collection
 
 - Create one source per `video_sources` entry, preserving order.
-- Map tiles by normalized path, then frame metadata.
+- Build a unique normalized-path-to-source-ID map. Map each tile only by its normalized `source_path`.
+- If a tile has no path and the collection has exactly one source, map it to that source. If more than one source exists, fail migration and name the ambiguous tile.
+- Frame index/timestamp may validate a path-based mapping but never choose between sources.
 - Preserve existing per-video settings and selection state.
+- Derive shared output geometry from validated embedded snapshots or root output settings. If a JSON collection has conflicting video target sizes and no authoritative shared output geometry, fail with a message requiring the user to open/save it in the prior version or choose a target size during a dedicated import flow.
 
-Migration fails atomically when ownership is ambiguous rather than assigning a tile silently to the wrong source. The loader reports the affected tile/source and leaves the current project untouched.
+Migration fails atomically when ownership is ambiguous rather than assigning a tile silently to the wrong source. A missing collection tile path, duplicate normalized source paths, inconsistent embedded tile dimensions, invalid media type, or conflicting unresolvable output geometry is an atomic failure. The loader reports the affected tile/source and leaves the current project untouched.
 
 ## Missing sources and relinking
 
@@ -315,19 +374,37 @@ Project loading does not fail merely because one or more sources are missing.
 - Load all embedded bucket snapshots and shared output state.
 - Keep export, reorder, rename, duplicate, delete, transform, and bucket Paint Cleanup available.
 - Disable crop, Grid, source Paint Cleanup, candidate processing, and source reprocessing for the missing document.
-- Offer **Relink**, **Locate All**, and **Close Tab** actions.
+- Offer **Relink** and **Close Tab** actions.
 
-Relinking validates media type, dimensions, and fingerprint. An exact fingerprint relinks immediately. A mismatched fingerprint requires explicit confirmation and does not rewrite existing bucket snapshots. Source-dependent reprocessing remains disabled until the mismatch is accepted.
+Relinking validates canonical-path uniqueness, media type, dimensions/metadata, and fingerprint:
+
+- A target path already owned by another descriptor is rejected; it never merges descriptors.
+- An exact fingerprint relinks immediately, updates `current_path`, and preserves all source state.
+- A matching media type and dimensions with a different fingerprint requires **Accept Replacement** confirmation. Acceptance increments generation, sets `current_path` and `current_fingerprint`, and clears revisions, candidate state, decoded caches, and pending jobs. Image selection/Grid geometry remains because dimensions match. Existing bucket snapshots and their provenance remain unchanged.
+- Different image dimensions require a stronger **Replace with Different Size** confirmation. Acceptance additionally clears the current selection and pending Grid selection, clamps Grid origin, rebuilds Grid geometry, and pauses Grid matching until a valid Grid is available.
+- For a video whose dimensions, frame count, FPS, or duration changed, acceptance clears thumbnail/frame caches, current frame, and extracted/selected references; drops resize overrides for unavailable frame indices; and requires extraction again.
+- A media-type mismatch is a hard failure and cannot be confirmed.
+
+Source-dependent reprocessing remains disabled until any mismatch is explicitly accepted.
+
+## Export compatibility
+
+PNG sheet and individual-tile exports are unchanged because they consume stored bucket images.
+
+Schema-4 metadata export adds a `sources` table and records `source_id`, creation-time `source_path`, and creation-time `source_fingerprint` for every tile/frame. Closed and missing descriptors remain in the table with availability state. For a single-source export, retain the existing top-level `source_path` field for compatibility. For a mixed-source export, set top-level `source_path` to `null`, add `source_count`, and continue emitting the existing `video_sources` projection for video consumers. Existing frame index, timestamp, crop, resize, and output rectangle fields remain unchanged.
 
 ## Error handling and atomicity
 
 - Opening a corrupt or unsupported source leaves existing tabs and bucket state unchanged.
+- Opening a changed file at an already-retained path requires an explicit replace decision and never creates an implicit second identity.
 - Adding a source that fails after partial initialization removes the partial document and tab.
 - Batch tile/frame additions remain atomic.
 - Project load builds and validates a temporary workspace/model before replacing the current session.
 - Project save writes the complete registry and tile snapshots atomically using the existing temporary-file/backup flow.
-- Closing a source with an active job waits for terminal cancellation before releasing its resources.
+- Closing a source with an active job uses the non-blocking transactional close flow; timeout aborts close without discarding the candidate or releasing source state.
 - A stale job cannot clear another document's job state or reset the wrong progress UI.
+- The global processing-mutation slot rejects a second source/tile inference request with a link to the owning tab and its Cancel control.
+- Bucket mutations stay disabled during bucket-tile inference, and successful completion creates one command only after revision validation.
 - Capacity errors apply to the shared bucket regardless of active source.
 - Relinking never mutates existing bucket snapshots automatically.
 
@@ -336,15 +413,22 @@ Relinking validates media type, dimensions, and fingerprint. An exact fingerprin
 ### Unit tests
 
 - SourceWorkspace add, activate, reorder, close, reopen, and canonical-path deduplication.
-- Source descriptor retention while referenced by bucket tiles and cleanup when unreferenced.
+- Source descriptor retention after close, explicit-forget eligibility, and protection by bucket tiles or Grid binding.
+- Same-path unchanged reopen, same-path content replacement decision, and relink collision rejection.
 - Image and video document serialization.
+- UI-independent `VideoDocumentState` serialization without Qt widgets.
 - Per-document settings isolation.
+- Lossless mapping of every legacy image/video/output setting into schema-4 ownership, including video target size/aspect and derived resampling/padding defaults.
+- Existing-snapshot resize using only shared output policy; source insertion using shared dimensions plus document policy.
 - Grid duplicate keys using source ID plus rectangle.
 - Video duplicate keys using source ID plus frame index.
 - Source-scoped candidate application and video reprocessing.
 - Schema-2/3-to-4 migration for image, video, and video collection projects.
+- Separate snapshot-archive and legacy-JSON migration guarantees and atomic ambiguity failures.
 - Missing-source placeholder and exact/mismatched relink validation.
+- Relink provenance immutability plus image/video state resets for accepted replacements.
 - Stale job result rejection by source ID, generation, request ID, and fingerprint.
+- Global processing-slot exclusion and bucket/command revision validation.
 
 ### Qt integration tests
 
@@ -353,14 +437,23 @@ Relinking validates media type, dimensions, and fingerprint. An exact fingerprin
 - Switch tabs and verify selection, Grid, zoom/pan, controls, candidate state, and video browser isolation.
 - Open a second image without clearing bucket or undo history.
 - Close a source tab and verify its bucket tiles remain editable/exportable.
+- Cancel a close at the candidate warning and verify no state changed.
+- Time out job cancellation and verify close aborts without candidate loss.
 - Preview a stored tile from a closed or missing source.
 - Reopen a closed path and verify source identity is reused.
+- Change a file at the same path and verify replace/cancel behavior.
 - Complete a background job on an inactive tab and verify only its state/indicator changes.
 - Close or relink a source during a job and verify its late result is ignored.
+- Attempt bucket mutation while bucket inference runs and verify it is disabled; verify completion creates one undo entry.
 - Verify **To Bucket** changes only tiles from the active image source.
 - Save/load tab order, active tab, per-source state, mixed provenance, output settings, and bucket pixels.
 - Load with missing sources, export successfully, then relink.
+- Relink to an already-owned path and verify the collision is rejected.
+- Accept same-size and different-size image replacements and verify the defined state resets.
+- Accept changed-video metadata and verify frame/browser state resets.
 - Bind final-sheet dimensions to one image Grid and verify tab switches do not change the binding.
+- Close an unreferenced Grid-match source and verify its descriptor/binding remain paused and recoverable.
+- Export mixed-source metadata and verify source table, compatibility fields, and immutable per-tile provenance.
 
 ### Regression tests
 
@@ -394,6 +487,6 @@ Each slice must keep the existing single-image and multi-video workflows functio
 - Closed or missing sources do not prevent snapshot-only bucket editing or export.
 - Source-dependent changes affect only tiles belonging to the selected source.
 - Saved `.sscproj` projects restore unified tabs and mixed-source buckets, or show relinkable placeholders.
-- Existing projects migrate without changing their rendered bucket pixels.
+- Existing snapshot-backed `.sscproj` projects migrate without rerendering their bucket pixels; legacy JSON continues through its established source-dependent renderer.
 - Stale asynchronous results cannot affect another source or the active UI.
 - Existing image and video test suites remain green.
