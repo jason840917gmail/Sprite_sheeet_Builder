@@ -87,7 +87,13 @@ Source identity is a persisted UUID. A canonical path is a locator, not identity
 - A relink target already owned by another descriptor is rejected and the owning source is identified. Source merging is not part of this release.
 - Relative-path and case normalization occur before collision checks, using platform-appropriate path comparison.
 
-Closing a tab removes its ID from visible tab order but retains its descriptor for the life of the project. Reopening the same canonical source reuses that source ID. A descriptor is removed only through an explicit **Forget Source** operation, which is available only when the source is closed, no tile references it, and `sheet_match_source_id` does not reference it. Clearing a Grid binding makes an otherwise-unreferenced descriptor eligible for forgetting.
+Closing a tab removes its ID from visible tab order but retains its descriptor for the life of the project. Reopening the same canonical source reuses that source ID. Descriptors are cleared only by creating/loading another project; an explicit source-forgetting UI is outside this release.
+
+Fingerprinting is versioned and deterministic:
+
+- Images use the existing decoded-pixel algorithm: SHA-256 over the ASCII prefix `"{width}x{height}:RGBA"` followed by row-major decoded RGBA bytes. The descriptor records `fingerprint_kind: "rgba-sha256-v1"`.
+- Videos use SHA-256 over the complete file byte stream, read in bounded chunks. The descriptor records `fingerprint_kind: "file-sha256-v1"`. Hashing runs off the UI thread and participates in open/relink cancellation.
+- Fingerprints created by another algorithm are not compared as exact matches.
 
 ### Source document boundary
 
@@ -140,9 +146,12 @@ Each image document retains:
 
 - source selection width and height and aspect lock;
 - Selection-grid rows and columns;
-- background remover, color, tolerance, thresholds, model, and compute preference;
+- full-source candidate settings: engine, color/tolerance or model thresholds, model ID, compute preference, and post-processing controls used by Source Background;
+- independent on-add tile-removal settings: enabled state, tile engine, color, tolerance/thresholds, model ID, compute preference, and post-processing controls used when a crop enters the bucket;
 - trim behavior;
 - on-add resize mode, resampling, padding, anchor, and edge bleed.
+
+Changing full-source candidate settings never changes tile-removal controls, and changing tile-removal controls never rewrites or reruns a source candidate. Schema-3 migration obtains full-source controls from the persisted source-processing recipe/panel state when present and tile-removal controls from legacy `AppSettings`; missing full-source controls use current Source Background defaults.
 
 Image insertion creates a temporary bucket-normalization policy from the project-wide output dimensions plus this document's on-add policy. It does not mutate shared output policy.
 
@@ -169,6 +178,9 @@ The current `match_sheet_to_grid` behavior becomes an optional `sheet_match_sour
 - Switching tabs does not silently change that binding.
 - Enabling it on another image transfers the binding.
 - Closing or losing the bound source preserves the last valid sheet dimensions and shows that matching is paused.
+- Reopening or exactly relinking the same current fingerprint automatically resumes matching once that source has a valid Grid; its Grid dimensions become authoritative again.
+- Accepting a changed fingerprint or different-size replacement keeps matching paused. The user must explicitly choose **Resume matching to this Grid**, which warns that current sheet dimensions will be replaced.
+- While matching is paused, sheet dimensions are editable and remain unchanged until automatic exact-source resumption or explicit replacement-source resumption.
 - Video sources cannot become Grid-match sources.
 
 ## Unified tab interface
@@ -208,15 +220,17 @@ All crop/frame addition paths stamp the active document's source ID. Duplicating
 
 Source-dependent behavior is scoped as follows:
 
-- Grid duplicate detection keys image tiles by `(source_id, source_rect)`, so identical rectangles from different images remain distinct.
-- Video duplicate detection keys frames by `(source_id, frame_index)` instead of path alone.
-- **To Bucket** updates only image tiles whose `source_id` matches the active image document.
-- Reprocessing a video updates only frames belonging to that video document.
+- Grid duplicate detection keys image tiles by `(source_id, source_fingerprint, source_rect)`, so identical rectangles from different images or accepted source replacements remain distinct.
+- Video duplicate detection keys frames by `(source_id, source_fingerprint, frame_index)` instead of path alone.
+- **To Bucket** updates only image tiles whose `source_id` and `source_fingerprint` match the active image document and candidate.
+- Reprocessing a video updates only frames whose source ID and fingerprint match that video document's current file.
 - Candidate activation changes only future extraction from its image document.
-- Source overlay markers show only bucket selections belonging to the active source.
+- Source overlay markers show only bucket selections belonging to the active source and current fingerprint. Historical-version tiles remain visible in the bucket but do not mark current Grid cells as already added.
 - Animation preview retains its current active-video filtering; the final-sheet preview always shows the entire bucket.
 
 Selecting a bucket tile whose source is not open previews its stored snapshot. Source-dependent actions are disabled with an explanation and a **Reopen/Relink Source** action.
+
+Tiles from an older or unknown fingerprint are never silently rebuilt from an accepted replacement. The only first-release path for rebuilding them is a separately confirmed **Rebuild Historical Tiles from Current Source** command. It validates every crop/frame against the current source, applies atomically, and—because it creates new pixels—updates each successfully rebuilt tile's path, fingerprint, and revision provenance to the current source version in the same undoable command. This command is unavailable when any target cannot be mapped safely.
 
 ## Tab closing and source lifetime
 
@@ -230,7 +244,7 @@ Close follows a transactional sequence:
 4. Complete the close only after every owned job emits one terminal signal. Candidate discard and pixel/cache release happen at this commit point.
 5. If cancellation reports failure or does not settle within five seconds, abort the close, restore the tab to usable state, keep the candidate, and report that the job must finish or be cancelled before closing. The UI must not block while waiting.
 
-Large decoded images, video frame caches, and revision pixels may then be released. Reopening reloads the original file and restores serialized settings/view state. The last active processing recipe is restored as control values only; the source opens on its immutable original with **Processing must be rerun** until the user runs it again. Bucket snapshots remain unchanged.
+Large decoded images, video frame caches, and revision pixels may then be released. Reopening loads `current_path` and restores serialized settings/view state. In this document, an image's “immutable original” means the unprocessed decoded pixels of its current accepted path/fingerprint; `original_path` and `original_fingerprint` are historical provenance and are not reopening targets after an accepted replacement. The last active processing recipe is restored as control values only; the source opens on its current immutable original with **Processing must be rerun** until the user runs it again. Bucket snapshots remain unchanged.
 
 ## Asynchronous job safety
 
@@ -272,6 +286,7 @@ Representative manifest shape:
       "original_path": "sources/character.png",
       "current_path": "sources/character.png",
       "display_name": "character.png",
+      "fingerprint_kind": "rgba-sha256-v1",
       "original_fingerprint": "sha256...",
       "current_fingerprint": "sha256...",
       "source_size": [1024, 1024],
@@ -314,14 +329,15 @@ Schema invariants:
 | Field | Invariant |
 |---|---|
 | `sources` | List of objects with unique, non-empty `source_id` values. |
-| Source paths | `current_path` is nullable only for an unresolved source. Resolved canonical paths are unique across descriptors. `original_path` is retained for provenance. |
-| Fingerprints | `original_fingerprint` never changes. `current_fingerprint` changes only after exact relink or explicit accepted replacement. |
+| Source paths | `current_path` is nullable only for an unresolved source. Resolved canonical paths are unique across descriptors. `original_path` is retained for provenance and may be null only for migrated legacy data that never recorded it. |
+| Source size | Positive width/height when known. It may be null only for unresolved migrated legacy descriptors whose old manifest did not record it. |
+| Fingerprints | `fingerprint_kind`, `original_fingerprint`, and `current_fingerprint` may be null only for migrated legacy provenance that cannot be derived without a source. A known `original_fingerprint` never changes. A known `current_fingerprint` changes only after exact relink or explicit accepted replacement. |
 | `open` / `tab_order` | Open sources have distinct dense integer orders `0..n-1`. Closed sources have `tab_order: null`. |
 | `active_source_id` | Null exactly when no source is open; otherwise references an open source. |
 | `sheet_match_source_id` | Null or references an image descriptor. It may reference a closed/missing image, in which case matching is paused. |
 | Source settings | Discriminated and validated by `source_type`; image and video payloads cannot be interchanged. |
 | `view_state` | Contains only serializable coordinates, tool IDs, selections, and Grid state. Loader clamps geometry to a successfully loaded source and clears invalid geometry. |
-| Tiles | Every tile references an existing descriptor and carries immutable creation-time source type, path, and fingerprint. |
+| Tiles | Every tile references an existing descriptor and carries immutable creation-time source type, path, and fingerprint. `source_fingerprint` may be null only on a migrated legacy tile whose historical source fingerprint is unknowable. |
 
 Persisted video state includes metadata needed for validation, sampling controls, extracted frame references, selected frame indices, current frame index, source-processing controls, seed count, and resize overrides. Thumbnail pixels, decoded-frame caches, workers, cancellation tokens, progress, and `FrameBrowser` widgets are ephemeral and are rebuilt after load.
 
@@ -340,6 +356,8 @@ Schema-2 and schema-3 migration produces schema-4 runtime data before models are
 | Schema-2/3 `.sscproj` | Embedded base snapshots | Sources may be missing | Embedded tile pixels remain byte-equivalent after decode/encode-independent in-memory loading; migration does not rerender them. |
 | Current video JSON/collection | No complete portable snapshot guarantee | Every referenced video required for source-dependent reconstruction | Existing validated frame/crop processing path is used. |
 | Legacy image JSON | No snapshots | Referenced image required | Existing `legacy_v1_renderer` behavior is preserved; output depends on the located source matching the saved project. |
+
+When a snapshot-backed archive is migrated while a source is missing, migration creates the descriptor with whatever historical path/type metadata exists and leaves unavailable dimensions, fingerprint kind, and fingerprints null. It does not invent provenance from tile pixels because a crop snapshot cannot fingerprint the complete source. Migrated tile fingerprints are likewise null unless the old manifest authoritatively supplied one. If the source is available, the loader computes the defined current fingerprint and dimensions; it still leaves `original_fingerprint` null when the historical identity cannot be proven.
 
 ### Existing image project
 
@@ -380,6 +398,7 @@ Relinking validates canonical-path uniqueness, media type, dimensions/metadata, 
 
 - A target path already owned by another descriptor is rejected; it never merges descriptors.
 - An exact fingerprint relinks immediately, updates `current_path`, and preserves all source state.
+- If legacy `current_fingerprint` is unknown, exact identity cannot be claimed. Relinking shows **Historical identity unverified** with known path/type/dimension evidence and requires explicit association. Acceptance sets `current_path`, `current_fingerprint`, `fingerprint_kind`, and current dimensions, while leaving unknown historical `original_fingerprint` null. Existing tile provenance remains unknown.
 - A matching media type and dimensions with a different fingerprint requires **Accept Replacement** confirmation. Acceptance increments generation, sets `current_path` and `current_fingerprint`, and clears revisions, candidate state, decoded caches, and pending jobs. Image selection/Grid geometry remains because dimensions match. Existing bucket snapshots and their provenance remain unchanged.
 - Different image dimensions require a stronger **Replace with Different Size** confirmation. Acceptance additionally clears the current selection and pending Grid selection, clamps Grid origin, rebuilds Grid geometry, and pauses Grid matching until a valid Grid is available.
 - For a video whose dimensions, frame count, FPS, or duration changed, acceptance clears thumbnail/frame caches, current frame, and extracted/selected references; drops resize overrides for unavailable frame indices; and requires extraction again.
@@ -391,7 +410,16 @@ Source-dependent reprocessing remains disabled until any mismatch is explicitly 
 
 PNG sheet and individual-tile exports are unchanged because they consume stored bucket images.
 
-Schema-4 metadata export adds a `sources` table and records `source_id`, creation-time `source_path`, and creation-time `source_fingerprint` for every tile/frame. Closed and missing descriptors remain in the table with availability state. For a single-source export, retain the existing top-level `source_path` field for compatibility. For a mixed-source export, set top-level `source_path` to `null`, add `source_count`, and continue emitting the existing `video_sources` projection for video consumers. Existing frame index, timestamp, crop, resize, and output rectangle fields remain unchanged.
+Metadata export advances from schema version 1 to schema version 2. Schema 2 adds a `sources` table and records `source_id`, creation-time `source_path`, and creation-time `source_fingerprint` for every tile/frame. Closed and missing descriptors remain in the table with availability state. Existing frame index, timestamp, crop, resize, and output rectangle fields remain unchanged.
+
+Compatibility fields are deterministic and never depend on the active tab:
+
+- With exactly one referenced source, top-level `source_path` identifies it. With more than one, `source_path` is null and `source_count` reports the number of referenced descriptors.
+- With exactly one referenced video and no other source, top-level `video_metadata` and `animation_fps` preserve their schema-1 meanings for that video.
+- With multiple videos or any image-plus-video mix, top-level `video_metadata` and `animation_fps` are null. Each video entry in `sources` contains its own media metadata and `animation_fps` (the video's source FPS under current behavior), and the existing `video_sources` projection carries the same per-video values for compatibility.
+- Image-only exports set video compatibility fields to null.
+
+Metadata export includes descriptors referenced by exported tiles, not unrelated empty tabs. Unknown migrated fingerprints are emitted as null rather than fabricated.
 
 ## Error handling and atomicity
 
@@ -415,9 +443,11 @@ Schema-4 metadata export adds a `sources` table and records `source_id`, creatio
 - SourceWorkspace add, activate, reorder, close, reopen, and canonical-path deduplication.
 - Source descriptor retention after close, explicit-forget eligibility, and protection by bucket tiles or Grid binding.
 - Same-path unchanged reopen, same-path content replacement decision, and relink collision rejection.
+- Versioned decoded-RGBA image fingerprint and streaming file-byte video fingerprint fixtures.
 - Image and video document serialization.
 - UI-independent `VideoDocumentState` serialization without Qt widgets.
 - Per-document settings isolation.
+- Independence of full-source candidate controls and on-add tile-removal controls.
 - Lossless mapping of every legacy image/video/output setting into schema-4 ownership, including video target size/aspect and derived resampling/padding defaults.
 - Existing-snapshot resize using only shared output policy; source insertion using shared dimensions plus document policy.
 - Grid duplicate keys using source ID plus rectangle.
@@ -425,6 +455,7 @@ Schema-4 metadata export adds a `sources` table and records `source_id`, creatio
 - Source-scoped candidate application and video reprocessing.
 - Schema-2/3-to-4 migration for image, video, and video collection projects.
 - Separate snapshot-archive and legacy-JSON migration guarantees and atomic ambiguity failures.
+- Missing legacy-source migration with nullable dimensions/fingerprints and explicit unverified relink association.
 - Missing-source placeholder and exact/mismatched relink validation.
 - Relink provenance immutability plus image/video state resets for accepted replacements.
 - Stale job result rejection by source ID, generation, request ID, and fingerprint.
@@ -441,11 +472,14 @@ Schema-4 metadata export adds a `sources` table and records `source_id`, creatio
 - Time out job cancellation and verify close aborts without candidate loss.
 - Preview a stored tile from a closed or missing source.
 - Reopen a closed path and verify source identity is reused.
+- After accepted replacement, reopen and verify `current_path` supplies the new immutable baseline while historical path/fingerprint remain provenance only.
 - Change a file at the same path and verify replace/cancel behavior.
 - Complete a background job on an inactive tab and verify only its state/indicator changes.
 - Close or relink a source during a job and verify its late result is ignored.
 - Attempt bucket mutation while bucket inference runs and verify it is disabled; verify completion creates one undo entry.
 - Verify **To Bucket** changes only tiles from the active image source.
+- Add identical image rectangles and video frame indices before and after accepted replacement; verify both versions coexist and old-version tiles are not silently reprocessed.
+- Explicitly rebuild historical tiles and verify pixels plus path/fingerprint provenance change together in one undoable command.
 - Save/load tab order, active tab, per-source state, mixed provenance, output settings, and bucket pixels.
 - Load with missing sources, export successfully, then relink.
 - Relink to an already-owned path and verify the collision is rejected.
@@ -453,7 +487,8 @@ Schema-4 metadata export adds a `sources` table and records `source_id`, creatio
 - Accept changed-video metadata and verify frame/browser state resets.
 - Bind final-sheet dimensions to one image Grid and verify tab switches do not change the binding.
 - Close an unreferenced Grid-match source and verify its descriptor/binding remain paused and recoverable.
-- Export mixed-source metadata and verify source table, compatibility fields, and immutable per-tile provenance.
+- Edit sheet dimensions while Grid matching is paused; verify exact-source reopen resumes automatically and changed-source replacement requires explicit resume.
+- Export schema-2 metadata fixtures for image-plus-video and multiple-video sessions with different FPS values; verify source table, null top-level mixed fields, compatibility projections, and immutable per-tile provenance.
 
 ### Regression tests
 
