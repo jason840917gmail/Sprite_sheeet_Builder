@@ -128,9 +128,14 @@ class BucketPanel(QWidget):
         self._update_buttons()
 
     def _label_for_tile(self, index: int, tile: TileItem) -> str:
+        source = (tile.source_path or tile.source_id or "unknown source")
+        source_label = str(source).split("\\")[-1].split("/")[-1]
+        if len(source_label) > 24:
+            source_label = source_label[:21] + "..."
         return (
             f"{index:03d}_{tile.name}\n"
-            f"crop {tile.source_size[0]}x{tile.source_size[1]}  final {tile.final_size[0]}x{tile.final_size[1]}"
+            f"{source_label}  crop {tile.source_size[0]}x{tile.source_size[1]}  "
+            f"final {tile.final_size[0]}x{tile.final_size[1]}"
         )
 
     def _update_buttons(self) -> None:

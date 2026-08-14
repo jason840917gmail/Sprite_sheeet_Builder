@@ -65,6 +65,9 @@ class ProjectModel:
     source_type: str = "image"
     video_metadata: dict[str, object] | None = None
     video_settings: dict[str, object] | None = None
+    source_id: str | None = None
+    source_fingerprint_kind: str | None = None
+    source_fingerprint: str | None = None
     settings: AppSettings = field(default_factory=AppSettings)
     tiles: list[TileItem] = field(default_factory=list)
 
@@ -90,8 +93,11 @@ class ProjectModel:
             source_size=(crop_rect[2], crop_rect[3]),
             final_size=(bucket.tile_width, bucket.tile_height),
             image_rgba=image,
+            source_id=self.source_id,
             source_type="image",
             source_path=self.source_image_path,
+            source_fingerprint_kind=self.source_fingerprint_kind,
+            source_fingerprint=self.source_fingerprint,
             base_image_rgba=base,
         )
         self.tiles.append(item)
@@ -125,8 +131,11 @@ class ProjectModel:
                     source_size=(normalized_rect[2], normalized_rect[3]),
                     final_size=(bucket.tile_width, bucket.tile_height),
                     image_rgba=image,
+                    source_id=self.source_id,
                     source_type="image",
                     source_path=self.source_image_path,
+                    source_fingerprint_kind=self.source_fingerprint_kind,
+                    source_fingerprint=self.source_fingerprint,
                     base_image_rgba=base,
                 )
             )
@@ -156,8 +165,11 @@ class ProjectModel:
                     source_size=(normalized_rect[2], normalized_rect[3]),
                     final_size=(image.width, image.height),
                     image_rgba=image,
+                    source_id=self.source_id,
                     source_type="image",
                     source_path=self.source_image_path,
+                    source_fingerprint_kind=self.source_fingerprint_kind,
+                    source_fingerprint=self.source_fingerprint,
                     base_image_rgba=base,
                 )
             )
@@ -203,10 +215,13 @@ class ProjectModel:
                     image_rgba=image,
                     tile_id=tile.tile_id,
                     source_revision_id=tile.source_revision_id,
+                    source_id=tile.source_id,
                     source_type=tile.source_type,
                     source_frame_index=tile.source_frame_index,
                     source_timestamp_ms=tile.source_timestamp_ms,
                     source_path=tile.source_path,
+                    source_fingerprint_kind=tile.source_fingerprint_kind,
+                    source_fingerprint=tile.source_fingerprint,
                     resize_size=tile.resize_size,
                     resize_mode=tile.resize_mode,
                     base_image_rgba=base,
@@ -232,10 +247,13 @@ class ProjectModel:
                     image_rgba=image,
                     tile_id=tile.tile_id,
                     source_revision_id=tile.source_revision_id,
+                    source_id=tile.source_id,
                     source_type=tile.source_type,
                     source_frame_index=tile.source_frame_index,
                     source_timestamp_ms=tile.source_timestamp_ms,
                     source_path=tile.source_path,
+                    source_fingerprint_kind=tile.source_fingerprint_kind,
+                    source_fingerprint=tile.source_fingerprint,
                     resize_size=tile.resize_size,
                     resize_mode=tile.resize_mode,
                     base_image_rgba=base,
@@ -277,10 +295,13 @@ class ProjectModel:
                     image_rgba=image,
                     tile_id=tile.tile_id,
                     source_revision_id=tile.source_revision_id,
+                    source_id=tile.source_id,
                     source_type="video",
                     source_frame_index=tile.source_frame_index,
                     source_timestamp_ms=tile.source_timestamp_ms,
                     source_path=tile.source_path,
+                    source_fingerprint_kind=tile.source_fingerprint_kind,
+                    source_fingerprint=tile.source_fingerprint,
                     resize_size=tile.resize_size,
                     resize_mode=tile.resize_mode,
                     base_image_rgba=base,
@@ -295,12 +316,15 @@ class ProjectModel:
         *,
         crop_rect: CropRect | None = None,
         source_path: str | None = None,
+        source_id: str | None = None,
+        source_fingerprint_kind: str | None = None,
+        source_fingerprint: str | None = None,
         resize_settings_by_frame: dict[int, FrameResizeSettings] | None = None,
     ) -> list[TileItem]:
         if not frames:
             return []
         existing_indices = {
-            (tile.source_path, tile.source_frame_index)
+            (tile.source_id or tile.source_path, tile.source_fingerprint, tile.source_frame_index)
             for tile in self.tiles
             if tile.source_type == "video"
             and tile.source_frame_index is not None
@@ -308,7 +332,11 @@ class ProjectModel:
         pending: list[TileItem] = []
         bucket = self.settings.bucket_settings()
         for ref, frame in sorted(frames, key=lambda pair: pair[0].index):
-            frame_key = (source_path, ref.index)
+            frame_key = (
+                source_id or source_path,
+                source_fingerprint,
+                ref.index,
+            )
             if frame_key in existing_indices:
                 continue
             rect = crop_rect or (0, 0, frame.width, frame.height)
@@ -324,10 +352,13 @@ class ProjectModel:
                     source_size=(normalized_rect[2], normalized_rect[3]),
                     final_size=(bucket.tile_width, bucket.tile_height),
                     image_rgba=image,
+                    source_id=source_id,
                     source_type="video",
                     source_frame_index=ref.index,
                     source_timestamp_ms=ref.timestamp_ms,
                     source_path=source_path,
+                    source_fingerprint_kind=source_fingerprint_kind,
+                    source_fingerprint=source_fingerprint,
                     resize_size=(resize_settings.target_width, resize_settings.target_height)
                     if resize_settings is not None
                     else None,
@@ -340,12 +371,34 @@ class ProjectModel:
         return pending
 
     def to_project_data(self) -> dict[str, object]:
+        source_entry = None
+        if self.source_image_path:
+            source_entry = {
+                "source_id": self.source_id or "source-0",
+                "source_type": self.source_type,
+                "original_path": self.source_image_path,
+                "current_path": self.source_image_path,
+                "display_name": self.source_image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1],
+                "fingerprint_kind": self.source_fingerprint_kind,
+                "original_fingerprint": self.source_fingerprint,
+                "current_fingerprint": self.source_fingerprint,
+                "open": True,
+                "tab_order": 0,
+                "settings": self.settings.to_dict(),
+                "view_state": {},
+                "availability": "available",
+            }
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "source_type": self.source_type,
             "source_image_path": self.source_image_path,
             "video_metadata": self.video_metadata,
             "video_settings": self.video_settings,
+            "source_id": self.source_id,
+            "source_fingerprint_kind": self.source_fingerprint_kind,
+            "source_fingerprint": self.source_fingerprint,
+            "sources": [source_entry] if source_entry is not None else [],
+            "active_source_id": self.source_id,
             "settings": self.settings.to_dict(),
             "tiles": [
                 {
@@ -353,10 +406,13 @@ class ProjectModel:
                     "name": tile.name,
                     "source_rect": list(tile.source_rect),
                     "source_revision_id": tile.source_revision_id,
+                    "source_id": tile.source_id,
                     "source_type": tile.source_type,
                     "source_frame_index": tile.source_frame_index,
                     "source_timestamp_ms": tile.source_timestamp_ms,
                     "source_path": tile.source_path,
+                    "source_fingerprint_kind": tile.source_fingerprint_kind,
+                    "source_fingerprint": tile.source_fingerprint,
                     "resize_size": list(tile.resize_size) if tile.resize_size is not None else None,
                     "resize_mode": tile.resize_mode,
                     "transform": tile.transform.to_dict(),
@@ -370,6 +426,11 @@ class ProjectModel:
         self.source_type = str(data.get("source_type") or "image")
         self.video_metadata = data.get("video_metadata") if isinstance(data.get("video_metadata"), dict) else None
         self.video_settings = data.get("video_settings") if isinstance(data.get("video_settings"), dict) else None
+        self.source_id = str(data.get("source_id")) if data.get("source_id") else None
+        self.source_fingerprint_kind = (
+            str(data.get("source_fingerprint_kind")) if data.get("source_fingerprint_kind") else None
+        )
+        self.source_fingerprint = str(data.get("source_fingerprint")) if data.get("source_fingerprint") else None
         settings_data = data.get("settings", {})
         if not isinstance(settings_data, dict):
             raise ValueError("Project settings must be an object.")
@@ -392,12 +453,21 @@ class ProjectModel:
                 item.tile_id = str(tile_data["tile_id"])
             if tile_data.get("source_revision_id"):
                 item.source_revision_id = str(tile_data["source_revision_id"])
+            item.source_id = str(tile_data["source_id"]) if tile_data.get("source_id") else self.source_id
             item.source_type = str(tile_data.get("source_type") or "image")
             frame_index = tile_data.get("source_frame_index")
             item.source_frame_index = int(frame_index) if frame_index is not None else None
             timestamp = tile_data.get("source_timestamp_ms")
             item.source_timestamp_ms = int(timestamp) if timestamp is not None else None
             item.source_path = str(tile_data.get("source_path")) if tile_data.get("source_path") else None
+            item.source_fingerprint_kind = (
+                str(tile_data.get("source_fingerprint_kind"))
+                if tile_data.get("source_fingerprint_kind")
+                else None
+            )
+            item.source_fingerprint = (
+                str(tile_data.get("source_fingerprint")) if tile_data.get("source_fingerprint") else None
+            )
             resize_size = tile_data.get("resize_size")
             if isinstance(resize_size, (list, tuple)) and len(resize_size) == 2:
                 item.resize_size = (int(resize_size[0]), int(resize_size[1]))

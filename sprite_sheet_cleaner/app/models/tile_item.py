@@ -17,11 +17,14 @@ class TileItem:
     final_size: tuple[int, int]
     image_rgba: Image.Image
     tile_id: str = field(default_factory=lambda: uuid4().hex)
+    source_id: str | None = None
     source_revision_id: str | None = None
     source_type: str = "image"
     source_frame_index: int | None = None
     source_timestamp_ms: int | None = None
     source_path: str | None = None
+    source_fingerprint_kind: str | None = None
+    source_fingerprint: str | None = None
     resize_size: tuple[int, int] | None = None
     resize_mode: str | None = None
     base_image_rgba: Image.Image | None = None
@@ -43,10 +46,13 @@ class TileItem:
             final_size=self.final_size,
             image_rgba=self.image_rgba.copy(),
             source_revision_id=self.source_revision_id,
+            source_id=self.source_id,
             source_type=self.source_type,
             source_frame_index=self.source_frame_index,
             source_timestamp_ms=self.source_timestamp_ms,
             source_path=self.source_path,
+            source_fingerprint_kind=self.source_fingerprint_kind,
+            source_fingerprint=self.source_fingerprint,
             resize_size=self.resize_size,
             resize_mode=self.resize_mode,
             base_image_rgba=self.base_image_rgba.copy(),

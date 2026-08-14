@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from uuid import uuid4
 
 from PIL import Image
 from PySide6.QtCore import QSize, QTimer, Qt
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTabWidget,
     QToolBar,
+    QWidget,
 )
 
 from sprite_sheet_cleaner.app.core.background_detector import detect_background_color
@@ -29,6 +31,8 @@ from sprite_sheet_cleaner.app.core.image_processor import clamp_crop_rect, proce
 from sprite_sheet_cleaner.app.core.tile_transform import render_tile_transform
 from sprite_sheet_cleaner.app.core.retouch import apply_retouch_stroke
 from sprite_sheet_cleaner.app.core.video_document import VideoDocument
+from sprite_sheet_cleaner.app.core.source_fingerprint import fingerprint_file, fingerprint_image
+from sprite_sheet_cleaner.app.core.source_workspace import SourceWorkspace
 from sprite_sheet_cleaner.app.core.video_source import (
     FrameRef,
     VideoMetadata,
@@ -41,6 +45,7 @@ from sprite_sheet_cleaner.app.models.app_settings import AppSettings
 from sprite_sheet_cleaner.app.models.frame_resize_settings import FrameResizeSettings
 from sprite_sheet_cleaner.app.models.tile_transform import TileTransform
 from sprite_sheet_cleaner.app.models.video_settings import VideoSettings
+from sprite_sheet_cleaner.app.models.source_document import ImageDocument, SourceRecord
 from sprite_sheet_cleaner.app.jobs.qt_job_controller import JobHandle, QtJobController
 from sprite_sheet_cleaner.app.services.source_processing_service import SourceProcessingService
 from sprite_sheet_cleaner.app.services.source_repository import SourceRepository
@@ -93,6 +98,7 @@ class MainWindow(QMainWindow):
         self.runtime_registry = default_runtime_registry()
         self.command_stack = CommandStack()
         self._source_job: JobHandle | None = None
+        self._source_job_source_id: str | None = None
         self._tile_job: JobHandle | None = None
         self._pending_tile_add: dict[str, object] | None = None
         self.job_controller = QtJobController(self)
@@ -102,6 +108,11 @@ class MainWindow(QMainWindow):
         self.video_settings = VideoSettings()
         self._video_resize_settings: dict[int, FrameResizeSettings] = {}
         self.video_documents: list[VideoDocument] = []
+        self.image_documents: dict[str, ImageDocument] = {}
+        self._source_documents: dict[str, object] = {}
+        self._source_tab_ids: list[str] = []
+        self._last_active_source_id: str | None = None
+        self.source_workspace = SourceWorkspace()
         self._current_frame_ref = None
         self._video_frame_cache: dict[int, Image.Image] = {}
         self._video_background_detected = False
@@ -128,10 +139,15 @@ class MainWindow(QMainWindow):
 
         self.source_viewer = SourceViewer()
         self.source_background_panel = SourceBackgroundPanel()
-        self.video_tabs = QTabWidget()
-        self.video_tabs.setDocumentMode(True)
-        self.video_tabs.setTabsClosable(True)
-        self.video_tabs.setMinimumHeight(150)
+        self.source_tabs = QTabWidget()
+        self.source_tabs.setDocumentMode(True)
+        self.source_tabs.setTabsClosable(True)
+        self.source_tabs.setMinimumHeight(32)
+        # Keep the historical attribute as an alias while the rest of the
+        # video workflow is migrated to the unified source strip.
+        self.video_tabs = self.source_tabs
+        self.video_frame_stack = QStackedWidget()
+        self.video_frame_stack.setMinimumHeight(150)
         self.frame_browser: FrameBrowser | None = None
         self.settings_panel = SettingsPanel()
         self.video_settings_panel = VideoSettingsPanel()
@@ -160,11 +176,14 @@ class MainWindow(QMainWindow):
 
         self.left_splitter = QSplitter(Qt.Vertical)
         self.left_splitter.setChildrenCollapsible(False)
+        self.left_splitter.addWidget(self.source_tabs)
         self.left_splitter.addWidget(self.source_viewer)
-        self.left_splitter.addWidget(self.video_tabs)
-        self.left_splitter.setStretchFactor(0, 1)
+        self.left_splitter.addWidget(self.video_frame_stack)
+        self.left_splitter.setStretchFactor(0, 0)
         self.left_splitter.setStretchFactor(1, 1)
-        self.video_tabs.hide()
+        self.left_splitter.setStretchFactor(2, 0)
+        self.source_tabs.hide()
+        self.video_frame_stack.hide()
 
         self.right_panel_stack = QStackedWidget()
         self.right_panel_stack.addWidget(self.settings_panel)
@@ -197,7 +216,7 @@ class MainWindow(QMainWindow):
         width = max(self.centralWidget().width(), 1)
         height = max(self.centralWidget().height(), 1)
         self.main_splitter.setSizes([round(width * 0.76), round(width * 0.24)])
-        self.left_splitter.setSizes([round(height * 0.78), round(height * 0.22)])
+        self.left_splitter.setSizes([32, round(height * 0.66), round(height * 0.22)])
         self.right_splitter.setSizes(
             [round(height * 0.20), round(height * 0.28), round(height * 0.32), round(height * 0.20)]
         )
@@ -208,9 +227,10 @@ class MainWindow(QMainWindow):
         height = max(self.left_splitter.height(), 1)
         handle_space = self.left_splitter.handleWidth()
         available = max(3, height - handle_space)
-        source_size = available // 2
-        frame_size = max(1, available - source_size)
-        self.left_splitter.setSizes([source_size, frame_size])
+        tab_size = 32
+        frame_size = max(1, round(available * 0.28))
+        source_size = max(1, available - tab_size - frame_size)
+        self.left_splitter.setSizes([tab_size, source_size, frame_size])
         self._video_frame_splitter_initialized = True
 
     def _create_actions(self) -> None:
@@ -287,6 +307,7 @@ class MainWindow(QMainWindow):
         self.open_action = QAction("&Open Image...", self)
         self.open_action.setShortcut(QKeySequence.Open)
         self.open_video_action = QAction("Open &Video...", self)
+        self.relink_source_action = QAction("Relink Active Source...", self)
         self.save_project_action = QAction("&Save Project...", self)
         self.save_project_action.setShortcut(QKeySequence.Save)
         self.load_project_action = QAction("&Load Project...", self)
@@ -301,6 +322,7 @@ class MainWindow(QMainWindow):
         for action in (
             self.open_action,
             self.open_video_action,
+            self.relink_source_action,
             self.save_project_action,
             self.load_project_action,
             self.export_sheet_action,
@@ -332,6 +354,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.open_action.triggered.connect(self._open_image)
         self.open_video_action.triggered.connect(self._open_video)
+        self.relink_source_action.triggered.connect(self._relink_active_source)
         self.save_project_action.triggered.connect(self._save_project)
         self.load_project_action.triggered.connect(self._load_project)
         self.export_sheet_action.triggered.connect(self._export_sheet)
@@ -367,8 +390,8 @@ class MainWindow(QMainWindow):
         self.source_viewer.tileTransformPreviewChanged.connect(self._tile_transform_preview_changed)
         self.source_viewer.tileTransformCommitRequested.connect(self._apply_tile_transform)
         self.source_viewer.tileTransformCancelRequested.connect(self._cancel_tile_transform)
-        self.video_tabs.currentChanged.connect(self._video_tab_changed)
-        self.video_tabs.tabCloseRequested.connect(self._close_video_tab)
+        self.source_tabs.currentChanged.connect(self._source_tab_changed)
+        self.source_tabs.tabCloseRequested.connect(self._close_source_tab)
         self.settings_panel.settingsChanged.connect(self._settings_changed)
         self.settings_panel.tileProcessingChanged.connect(self._tile_processing_changed)
         self.settings_panel.addSelectionRequested.connect(self._add_selection_to_bucket)
@@ -471,7 +494,7 @@ class MainWindow(QMainWindow):
             "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)",
         )
         if path:
-            self._load_source_image(Path(path), clear_tiles=True)
+            self._load_source_image(Path(path), clear_tiles=False)
 
     def _open_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -482,24 +505,239 @@ class MainWindow(QMainWindow):
         )
         if path:
             source_path = Path(path)
-            existing_index = next(
-                (
-                    index
-                    for index, document in enumerate(self.video_documents)
-                    if document.path.resolve() == source_path.resolve()
-                ),
-                None,
-            )
-            if existing_index is not None:
-                self.video_tabs.setCurrentIndex(existing_index)
+            existing = self.source_workspace.find_by_canonical_path(source_path)
+            if existing is not None:
+                if existing.source_id in self._source_tab_ids:
+                    self.source_tabs.setCurrentIndex(self._source_tab_ids.index(existing.source_id))
+                else:
+                    self._reopen_source_tab(existing.source_id)
                 return
-            self._load_source_video(source_path, clear_tiles=not self.video_documents)
+            self._load_source_video(source_path, clear_tiles=False)
+
+    def _relink_active_source(self) -> None:
+        source_id = self._active_source_id()
+        record = self.source_workspace.records.get(source_id) if source_id else None
+        if record is None:
+            QMessageBox.information(self, "Relink source", "Select a source tab to relink.")
+            return
+        if record.source_type == "video":
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Relink video source",
+                "",
+                "Videos (*.mp4 *.mov *.avi *.mkv *.webm);;All files (*.*)",
+            )
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Relink image source",
+                "",
+                "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)",
+            )
+        if not path:
+            return
+        replacement = Path(path).resolve()
+        existing = self.source_workspace.find_by_canonical_path(replacement)
+        if existing is not None and existing.source_id != record.source_id:
+            QMessageBox.warning(self, "Relink source", "That file is already open in another source tab.")
+            return
+        old_path = record.current_path
+        record.current_path = str(replacement)
+        record.availability = "available"
+        try:
+            if record.source_type == "image":
+                with Image.open(replacement) as image:
+                    source_image = image.convert("RGBA")
+                repository = SourceRepository()
+                repository.open_original(source_image, replacement)
+                document = ImageDocument(
+                    record,
+                    source_image,
+                    repository,
+                    AppSettings.from_dict(record.settings or self._image_settings.to_dict()),
+                )
+                self._source_documents[record.source_id] = document
+                self.image_documents[record.source_id] = document
+                self._activate_image_document(document)
+            else:
+                metadata = read_video_metadata(replacement)
+                kind, digest = fingerprint_file(replacement)
+                document = VideoDocument(
+                    path=replacement,
+                    metadata=metadata,
+                    browser=FrameBrowser(),
+                    source_id=record.source_id,
+                    fingerprint_kind=kind,
+                    fingerprint=digest,
+                    settings=VideoSettings.from_dict(record.settings or {}),
+                )
+                document.browser.set_metadata(metadata)
+                self._connect_video_document(document)
+                self.video_frame_stack.addWidget(document.browser)
+                self._source_documents[record.source_id] = document
+                self.video_documents.append(document)
+                self._activate_video_document(document, show_frame=False)
+                self._extract_video_frames(document)
+            kind, digest = fingerprint_file(replacement) if record.source_type == "video" else fingerprint_image(source_image)
+            record.fingerprint_kind = kind
+            record.current_fingerprint = digest
+            self.source_tabs.setTabText(self.source_tabs.currentIndex(), replacement.name)
+            self.source_tabs.setTabToolTip(self.source_tabs.currentIndex(), str(replacement))
+            self.statusBar().showMessage(f"Relinked source to {replacement.name}")
+        except Exception as exc:
+            record.current_path = old_path
+            record.availability = "missing"
+            QMessageBox.critical(self, "Relink source failed", str(exc))
 
     def _active_video_document(self) -> VideoDocument | None:
-        index = self.video_tabs.currentIndex()
-        if 0 <= index < len(self.video_documents):
-            return self.video_documents[index]
+        source_id = self._active_source_id()
+        document = self._source_documents.get(source_id) if source_id else None
+        if isinstance(document, VideoDocument):
+            return document
+        for document in self.video_documents:
+            if document.source_id == source_id:
+                return document
         return None
+
+    def _active_source_id(self) -> str | None:
+        index = self.source_tabs.currentIndex()
+        if 0 <= index < len(self._source_tab_ids):
+            return self._source_tab_ids[index]
+        return None
+
+    def _source_document(self, source_id: str | None) -> object | None:
+        return self._source_documents.get(source_id) if source_id else None
+
+    def _add_source_tab(self, record: SourceRecord) -> int:
+        placeholder = QWidget(self.source_tabs)
+        label = record.display_name + (" (missing)" if record.availability == "missing" else "")
+        index = self.source_tabs.addTab(placeholder, label)
+        self._source_tab_ids.insert(index, record.source_id)
+        self.source_tabs.setTabToolTip(index, record.current_path or record.display_name)
+        self.source_tabs.show()
+        QTimer.singleShot(0, self._initialize_video_frame_splitter)
+        return index
+
+    def _reopen_source_tab(self, source_id: str) -> None:
+        record = self.source_workspace.records.get(source_id)
+        document = self._source_documents.get(source_id)
+        if record is None or document is None:
+            return
+        record.open = True
+        if source_id not in self.source_workspace.open_ids:
+            self.source_workspace.activate(source_id)
+        index = self._add_source_tab(record)
+        self.source_tabs.setCurrentIndex(index)
+
+    def _capture_active_image_document(self, source_id: str | None = None) -> None:
+        source_id = source_id or self._last_active_source_id or self._active_source_id()
+        document = self._source_documents.get(source_id) if source_id else None
+        if not isinstance(document, ImageDocument):
+            return
+        document.settings = AppSettings.from_dict(self.model.settings.to_dict())
+        document.record.settings = document.settings.to_dict()
+        document.record.view_state = {
+            "selection_rect": list(self.source_viewer.selection_rect()) if self.source_viewer.selection_rect() else None,
+            "grid_origin": list(self.source_viewer.grid_origin()),
+            "tool": self.source_viewer.current_tool(),
+            "zoom": self._last_zoom,
+        }
+
+    def _activate_image_document(self, document: ImageDocument) -> None:
+        self._bucket_preview_active = False
+        self._source_preview_override = None
+        self._reset_retouch_state()
+        self.source_type = "image"
+        self.source_image = document.repository.active_image()
+        self.source_repository = document.repository
+        self.source_processing_service.repository = document.repository
+        self.video_source_path = None
+        self.video_metadata = None
+        self.video_settings = VideoSettings()
+        self._video_resize_settings = {}
+        self._current_frame_ref = None
+        self._video_frame_cache = {}
+        self._video_background_detected = False
+        self.frame_browser = None
+        self.model.source_type = "image"
+        self.model.source_image_path = str(document.path) if document.path else None
+        self.model.source_id = document.source_id
+        self.model.source_fingerprint_kind = document.record.fingerprint_kind
+        self.model.source_fingerprint = document.record.current_fingerprint or document.record.original_fingerprint
+        self.model.video_metadata = None
+        self.model.video_settings = None
+        self.model.settings = AppSettings.from_dict(document.settings.to_dict())
+        self._image_settings = self.model.settings
+        self.settings_panel.set_settings(self.model.settings)
+        self._set_image_panel_mode()
+        self.video_frame_stack.hide()
+        self.source_viewer.set_image(pil_to_qimage(self.source_image))
+        self._apply_selection_geometry()
+        state = document.record.view_state
+        selection = state.get("selection_rect")
+        if isinstance(selection, list) and len(selection) == 4:
+            self.source_viewer.set_selection_rect(tuple(int(value) for value in selection))
+        origin = state.get("grid_origin")
+        if isinstance(origin, list) and len(origin) == 2:
+            current = self.source_viewer.grid_origin()
+            self.source_viewer.nudge_grid(int(origin[0]) - current[0], int(origin[1]) - current[1])
+        tool = state.get("tool")
+        if isinstance(tool, str) and tool in {"pointer", "select", "grid", "retouch", "rotate"}:
+            self._set_viewer_tool(tool)
+        active = self.source_repository.document.active_revision
+        if active is not None:
+            self.source_background_panel.set_candidate_state(False, f"Revision {active.revision_id[:8]} is active.")
+        else:
+            self.source_background_panel.set_candidate_state(False, "Original source is active")
+        self._sync_sheet_to_grid()
+        self._refresh_all()
+        self._last_active_source_id = document.source_id
+
+    def _source_tab_changed(self, index: int) -> None:
+        if not 0 <= index < len(self._source_tab_ids):
+            return
+        self._capture_active_image_document(self._last_active_source_id)
+        source_id = self._source_tab_ids[index]
+        document = self._source_documents.get(source_id)
+        if isinstance(document, ImageDocument):
+            self._activate_image_document(document)
+        elif isinstance(document, VideoDocument):
+            self._activate_video_document(document)
+        self._refresh_all()
+
+    def _close_source_tab(self, index: int) -> None:
+        if not 0 <= index < len(self._source_tab_ids):
+            return
+        source_id = self._source_tab_ids[index]
+        document = self._source_documents.get(source_id)
+        if isinstance(document, VideoDocument):
+            document.browser.cancel_extraction()
+            if document.browser in [self.video_frame_stack.widget(i) for i in range(self.video_frame_stack.count())]:
+                frame_index = next(
+                    i for i in range(self.video_frame_stack.count()) if self.video_frame_stack.widget(i) is document.browser
+                )
+                self.video_frame_stack.removeWidget(document.browser)
+                document.browser.deleteLater()
+            self.video_documents = [item for item in self.video_documents if item.source_id != source_id]
+        elif isinstance(document, ImageDocument):
+            self._capture_active_image_document(source_id)
+        self.source_workspace.close_tab(source_id)
+        self._source_tab_ids.pop(index)
+        self.source_tabs.removeTab(index)
+        if not self._source_tab_ids:
+            self._last_active_source_id = None
+            self.frame_browser = None
+            self.source_image = None
+            self.source_type = "image"
+            self.video_source_path = None
+            self.video_metadata = None
+            self.video_frame_stack.hide()
+            self.source_tabs.hide()
+            self.source_viewer.set_image(QImage())
+            self._refresh_all()
+            return
+        self.source_tabs.setCurrentIndex(min(index, len(self._source_tab_ids) - 1))
+
 
     def _video_app_settings(self, document: VideoDocument) -> AppSettings:
         video = document.settings
@@ -543,6 +781,7 @@ class MainWindow(QMainWindow):
         self._set_viewer_tool("pointer")
 
     def _activate_video_document(self, document: VideoDocument, *, show_frame: bool = True) -> None:
+        self._capture_active_image_document(self._last_active_source_id)
         self._bucket_preview_active = False
         self._source_preview_override = None
         self._reset_retouch_state()
@@ -557,12 +796,24 @@ class MainWindow(QMainWindow):
         self._video_background_detected = document.background_detected
         self.model.source_type = "video"
         self.model.source_image_path = str(document.path)
+        self.model.source_id = document.source_id
+        self.model.source_fingerprint_kind = document.fingerprint_kind
+        self.model.source_fingerprint = document.fingerprint
         self.model.video_metadata = self._video_metadata_dict(document.metadata)
         self.model.settings = self._video_app_settings(document)
         self._set_video_panel_mode(document)
         self._sync_video_resize_project_data()
+        tab_index = self._source_tab_ids.index(document.source_id) if document.source_id in self._source_tab_ids else -1
+        if tab_index >= 0:
+            self.source_tabs.setTabText(tab_index, document.path.name)
+            self.source_tabs.setTabToolTip(tab_index, str(document.path))
+        frame_index = self.video_frame_stack.indexOf(document.browser)
+        if frame_index >= 0:
+            self.video_frame_stack.setCurrentIndex(frame_index)
+        self.video_frame_stack.show()
         if show_frame and document.current_ref is not None:
             self._show_video_frame(document, document.current_ref)
+        self._last_active_source_id = document.source_id
 
     def _video_metadata_dict(self, metadata: VideoMetadata) -> dict[str, object]:
         return {
@@ -590,90 +841,47 @@ class MainWindow(QMainWindow):
         browser.frameActivated.connect(lambda ref, document=document: self._show_video_frame(document, ref))
 
     def _video_tab_changed(self, index: int) -> None:
-        if not 0 <= index < len(self.video_documents):
-            self.frame_browser = None
-            return
-        document = self.video_documents[index]
-        self.video_tabs.show()
-        self._activate_video_document(document)
-        self._refresh_all()
+        self._source_tab_changed(index)
 
     def _close_video_tab(self, index: int) -> None:
-        if not 0 <= index < len(self.video_documents):
-            return
-        document = self.video_documents[index]
-        document.browser.cancel_extraction()
-        self.video_documents.pop(index)
-        self.video_tabs.removeTab(index)
-        if self.video_documents:
-            self._video_tab_changed(self.video_tabs.currentIndex())
-            return
-        self.frame_browser = None
-        self._bucket_preview_active = False
-        self.source_type = "image"
-        self.video_source_path = None
-        self.video_metadata = None
-        self.source_image = None
-        self._source_preview_override = None
-        self._reset_retouch_state()
-        self.model.source_type = "image"
-        self.model.source_image_path = None
-        self.model.video_metadata = None
-        self.model.video_settings = None
-        self.model.settings = self._image_settings
-        self.settings_panel.set_settings(self._image_settings)
-        self._set_image_panel_mode()
-        self.source_viewer.set_image(QImage())
-        self.video_tabs.hide()
-        self._refresh_all()
+        self._close_source_tab(index)
 
     def _clear_video_documents(self) -> None:
-        for document in self.video_documents:
-            document.browser.cancel_extraction()
-        self.video_tabs.clear()
+        for document in list(self.video_documents):
+            source_id = document.source_id
+            if source_id in self._source_tab_ids:
+                self._close_source_tab(self._source_tab_ids.index(source_id))
+            else:
+                document.browser.cancel_extraction()
         self.video_documents.clear()
         self.frame_browser = None
-        self.video_tabs.hide()
         self._video_frame_splitter_initialized = False
 
     def _load_source_image(self, path: Path, *, clear_tiles: bool) -> None:
         try:
             with Image.open(path) as image:
-                self.source_image = image.convert("RGBA")
+                source_image = image.convert("RGBA")
         except Exception as exc:
             QMessageBox.critical(self, "Open image failed", str(exc))
             return
 
+        existing = self.source_workspace.find_by_canonical_path(path)
+        if existing is not None:
+            if existing.source_id in self._source_tab_ids:
+                self.source_tabs.setCurrentIndex(self._source_tab_ids.index(existing.source_id))
+            else:
+                self._reopen_source_tab(existing.source_id)
+            return
+
+        document = self._register_image_document(path, source_image)
+
         self._bucket_preview_active = False
         self._source_preview_override = None
         self._reset_retouch_state()
-        self._clear_video_documents()
-        self.source_type = "image"
-        self.video_source_path = None
-        self.video_metadata = None
-        self.video_settings = VideoSettings()
-        self._video_resize_settings = {}
-        self._current_frame_ref = None
-        self._video_frame_cache = {}
-        self._video_background_detected = False
-        self.frame_browser = None
-        self.video_tabs.hide()
-        self.model.settings = self._image_settings
-        self.settings_panel.set_settings(self._image_settings)
-        self._set_image_panel_mode()
-        self.model.source_type = "image"
-        self.model.video_metadata = None
-        self.model.video_settings = None
-        self.model.source_image_path = str(path)
-        self.source_repository.open_original(self.source_image, path)
-        self.source_background_panel.set_candidate_state(False, "Original source is active")
         if clear_tiles:
             self.model.clear_tiles()
             self.command_stack.clear()
-        self.source_viewer.set_image(pil_to_qimage(self.source_image))
-        self._sync_sheet_to_grid()
-        self._last_selection = None
-        self._refresh_all()
+        self._activate_image_document(document)
         detected_color = self._detect_background_color_for_current_image(show_error_dialog=False)
         if detected_color is None:
             self.statusBar().showMessage(f"Opened {path.name}")
@@ -682,6 +890,71 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Opened {path.name} | Auto-detected background #{detected_color[0]:02X}{detected_color[1]:02X}{detected_color[2]:02X}"
         )
+
+    def _register_image_document(
+        self,
+        path: Path,
+        source_image: Image.Image,
+        *,
+        record: SourceRecord | None = None,
+        settings: AppSettings | None = None,
+    ) -> ImageDocument:
+        fingerprint_kind, fingerprint = fingerprint_image(source_image)
+        if record is None:
+            record = SourceRecord(
+                source_type="image",
+                original_path=str(path),
+                current_path=str(path),
+                display_name=path.name,
+                fingerprint_kind=fingerprint_kind,
+                original_fingerprint=fingerprint,
+                current_fingerprint=fingerprint,
+                source_size=source_image.size,
+            )
+        else:
+            record.source_type = "image"
+            record.current_path = str(path)
+            record.original_path = record.original_path or str(path)
+            record.display_name = record.display_name or path.name
+            record.source_size = record.source_size or source_image.size
+            record.fingerprint_kind = record.fingerprint_kind or fingerprint_kind
+            record.original_fingerprint = record.original_fingerprint or fingerprint
+            record.current_fingerprint = record.current_fingerprint or fingerprint
+        repository = SourceRepository()
+        repository.open_original(source_image, path)
+        document_settings = settings or AppSettings.from_dict(
+            self._image_settings.to_dict()
+        )
+        document = ImageDocument(record, source_image, repository, document_settings)
+        self.source_workspace.add(record)
+        self._source_documents[record.source_id] = document
+        self.image_documents[record.source_id] = document
+        tab_index = self._add_source_tab(record)
+        self.source_tabs.setCurrentIndex(tab_index)
+        return document
+
+    def _clear_all_source_documents(self) -> None:
+        if self._source_job is not None:
+            self._source_job.cancel()
+        for document in self.video_documents:
+            document.browser.cancel_extraction()
+        for index in range(self.video_frame_stack.count() - 1, -1, -1):
+            widget = self.video_frame_stack.widget(index)
+            self.video_frame_stack.removeWidget(widget)
+            widget.deleteLater()
+        self.source_tabs.blockSignals(True)
+        self.source_tabs.clear()
+        self.source_tabs.blockSignals(False)
+        self._source_tab_ids.clear()
+        self.video_documents.clear()
+        self.image_documents.clear()
+        self._source_documents.clear()
+        self.source_workspace.remove_all()
+        self._last_active_source_id = None
+        self.frame_browser = None
+        self.video_frame_stack.hide()
+        self.source_tabs.hide()
+        self._video_frame_splitter_initialized = False
 
     def _apply_source_background(self) -> None:
         if self.source_type != "image":
@@ -699,9 +972,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Apply background failed", str(exc))
             return
         self.source_background_panel.set_job_running(True, "Processing source background…")
+        source_id = self._active_source_id()
+        repository = self.source_repository
+        job_service = SourceProcessingService(repository, dict(self.source_processing_service.engines))
+        self._source_job_source_id = source_id
         self._source_job = self.job_controller.start(
             "source-background",
-            lambda progress, cancelled: self.source_processing_service.create_candidate(
+            lambda progress, cancelled: job_service.create_candidate(
                 settings,
                 progress=progress,
                 cancelled=cancelled,
@@ -717,7 +994,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{message} ({round(value * 100)}%)")
 
     def _source_job_completed(self, candidate: object) -> None:
+        source_id = self._source_job_source_id
         self._source_job = None
+        self._source_job_source_id = None
+        if source_id != self._active_source_id():
+            self.source_background_panel.set_job_running(False)
+            self.statusBar().showMessage("Background candidate is ready on its source tab.")
+            return
         processed_image = getattr(candidate, "processed_image", None)
         if isinstance(processed_image, Image.Image):
             self._source_preview_override = processed_image.copy()
@@ -734,12 +1017,14 @@ class MainWindow(QMainWindow):
 
     def _source_job_failed(self, error: object) -> None:
         self._source_job = None
+        self._source_job_source_id = None
         self.source_background_panel.set_job_running(False)
         self.source_background_panel.set_candidate_state(False, "Original source is active")
         QMessageBox.critical(self, "Apply background failed", str(error))
 
     def _source_job_cancelled(self) -> None:
         self._source_job = None
+        self._source_job_source_id = None
         self.source_background_panel.set_job_running(False)
         self.source_background_panel.set_candidate_state(False, "Processing cancelled; original source remains active")
         self.statusBar().showMessage("Background processing cancelled.")
@@ -805,8 +1090,16 @@ class MainWindow(QMainWindow):
         )
 
     def _load_source_video(self, path: Path, *, clear_tiles: bool) -> None:
+        existing = self.source_workspace.find_by_canonical_path(path)
+        if existing is not None:
+            if existing.source_id in self._source_tab_ids:
+                self.source_tabs.setCurrentIndex(self._source_tab_ids.index(existing.source_id))
+            else:
+                self._reopen_source_tab(existing.source_id)
+            return
         try:
             metadata = read_video_metadata(path)
+            fingerprint_kind, fingerprint = fingerprint_file(path)
         except Exception as exc:
             QMessageBox.critical(self, "Open video failed", str(exc))
             return
@@ -816,6 +1109,8 @@ class MainWindow(QMainWindow):
             path=path,
             metadata=metadata,
             browser=FrameBrowser(),
+            fingerprint_kind=fingerprint_kind,
+            fingerprint=fingerprint,
             settings=VideoSettings.from_dict(template_settings.to_dict()),
         )
         document.browser.set_metadata(metadata)
@@ -824,10 +1119,8 @@ class MainWindow(QMainWindow):
             self.model.clear_tiles()
             self.command_stack.clear()
 
-        self.video_documents.append(document)
-        tab_index = self.video_tabs.addTab(document.browser, path.name)
-        self.video_tabs.setTabToolTip(tab_index, str(path))
-        self.video_tabs.show()
+        self._register_video_document(document)
+        tab_index = self._source_tab_ids.index(document.source_id)
         QTimer.singleShot(0, self._initialize_video_frame_splitter)
         self.video_tabs.setCurrentIndex(tab_index)
         self._activate_video_document(document, show_frame=False)
@@ -835,6 +1128,38 @@ class MainWindow(QMainWindow):
         self._extract_video_frames(document)
         self._refresh_all()
         self.statusBar().showMessage(f"Opened video {path.name}")
+
+    def _register_video_document(
+        self,
+        document: VideoDocument,
+        *,
+        record: SourceRecord | None = None,
+    ) -> None:
+        if record is None:
+            record = SourceRecord(
+                source_id=document.source_id,
+                source_type="video",
+                original_path=str(document.path),
+                current_path=str(document.path),
+                display_name=document.path.name,
+                fingerprint_kind=document.fingerprint_kind,
+                original_fingerprint=document.fingerprint,
+                current_fingerprint=document.fingerprint,
+            )
+        else:
+            record.source_id = document.source_id
+            record.source_type = "video"
+            record.current_path = str(document.path)
+            record.original_path = record.original_path or str(document.path)
+            record.display_name = record.display_name or document.path.name
+            record.fingerprint_kind = record.fingerprint_kind or document.fingerprint_kind
+            record.original_fingerprint = record.original_fingerprint or document.fingerprint
+            record.current_fingerprint = record.current_fingerprint or document.fingerprint
+        self.source_workspace.add(record)
+        self._source_documents[document.source_id] = document
+        self.video_documents.append(document)
+        self.video_frame_stack.addWidget(document.browser)
+        self._add_source_tab(record)
 
     def _extract_video_frames(self, document: VideoDocument | None = None) -> None:
         document = document or self._active_video_document()
@@ -918,6 +1243,33 @@ class MainWindow(QMainWindow):
             oldest_index = next(iter(document.frame_cache))
             del document.frame_cache[oldest_index]
 
+    def _workspace_project_data(self) -> dict[str, object]:
+        self._capture_active_image_document()
+        data = self.model.to_project_data()
+        sources: list[dict[str, object]] = []
+        for source_id, record in self.source_workspace.records.items():
+            entry = record.to_dict()
+            document = self._source_documents.get(source_id)
+            if isinstance(document, VideoDocument):
+                entry["video_metadata"] = self._video_metadata_dict(document.metadata)
+                entry["video_settings"] = {
+                    **document.settings.to_dict(),
+                    "resize_overrides": {
+                        str(index): settings.to_dict()
+                        for index, settings in sorted(document.resize_settings.items())
+                    },
+                }
+                entry["frame_indices"] = [ref.index for ref in document.browser.frames()]
+                entry["selected_frame_indices"] = [ref.index for ref in document.browser.selected_refs()]
+            sources.append(entry)
+        data["schema_version"] = 4
+        data["sources"] = sources
+        data["active_source_id"] = self._active_source_id()
+        data["open_source_ids"] = list(self.source_workspace.open_ids)
+        data["source_type"] = self.source_type
+        data["source_image_path"] = self.model.source_image_path
+        return data
+
     def _save_project(self) -> None:
         if self.source_type == "image" and self.source_image is None:
             QMessageBox.warning(self, "Save project", "Open a source image or video before saving a project.")
@@ -938,10 +1290,10 @@ class MainWindow(QMainWindow):
             return
         output_path = Path(path)
         try:
-            if output_path.suffix.lower() == ".sscproj" and self.source_type == "image":
-                output_path = save_model_project(output_path, self.model)
+            project_data = self._workspace_project_data()
+            if output_path.suffix.lower() == ".sscproj":
+                output_path = save_model_project(output_path, self.model, project_data=project_data)
             else:
-                project_data = self.model.to_project_data()
                 if self.video_documents and self.source_type == "video":
                     project_data["source_type"] = "video_collection" if len(self.video_documents) > 1 else "video"
                     project_data["video_sources"] = [
@@ -971,6 +1323,12 @@ class MainWindow(QMainWindow):
                         return value
 
                 project_data["source_image_path"] = relative_if_possible(project_data.get("source_image_path"))
+                sources = project_data.get("sources")
+                if isinstance(sources, list):
+                    for source_data in sources:
+                        if isinstance(source_data, dict):
+                            source_data["original_path"] = relative_if_possible(source_data.get("original_path"))
+                            source_data["current_path"] = relative_if_possible(source_data.get("current_path"))
                 video_sources = project_data.get("video_sources")
                 if isinstance(video_sources, list):
                     for video_data in video_sources:
@@ -1000,7 +1358,7 @@ class MainWindow(QMainWindow):
         try:
             if project_path.suffix.lower() == ".sscproj":
                 loaded_model = ProjectModel()
-                load_model_project(project_path, loaded_model)
+                loaded_archive = load_model_project(project_path, loaded_model)
                 source_path_value = loaded_model.source_image_path
                 if not source_path_value:
                     raise ValueError("Project does not include a source_image_path.")
@@ -1009,22 +1367,54 @@ class MainWindow(QMainWindow):
                     source_path = project_path.parent / source_path
                 source_path = source_path.resolve()
                 if not source_path.exists():
-                    raise FileNotFoundError(f"Source image was not found: {source_path}")
+                    self.model = loaded_model
+                    self._clear_all_source_documents()
+                    sources = loaded_archive.data.get("sources")
+                    if isinstance(sources, list) and sources:
+                        for entry in sources:
+                            if not isinstance(entry, dict):
+                                continue
+                            record = SourceRecord.from_dict(entry)
+                            record.availability = "missing"
+                            self.source_workspace.add(record)
+                            self._source_documents[record.source_id] = None
+                            self._add_source_tab(record)
+                    else:
+                        record = SourceRecord(
+                            source_id=loaded_model.source_id or uuid4().hex,
+                            source_type=loaded_model.source_type,
+                            original_path=str(source_path),
+                            current_path=str(source_path),
+                            display_name=source_path.name,
+                            fingerprint_kind=loaded_model.source_fingerprint_kind,
+                            original_fingerprint=loaded_model.source_fingerprint,
+                            current_fingerprint=loaded_model.source_fingerprint,
+                            availability="missing",
+                        )
+                        self.source_workspace.add(record)
+                        self._source_documents[record.source_id] = None
+                        self._add_source_tab(record)
+                    self.source_image = None
+                    self.source_type = "image"
+                    self.source_tabs.show()
+                    self.statusBar().showMessage("Loaded project; source file is missing. Use Relink Active Source…")
+                    self.command_stack.clear()
+                    self._refresh_all()
+                    return
                 with Image.open(source_path) as image:
                     self.source_image = image.convert("RGBA")
                 self._source_preview_override = None
                 self.model = loaded_model
                 self.model.source_image_path = str(source_path)
                 self._image_settings = self.model.settings
-                self._clear_video_documents()
-                self.source_type = "image"
-                self.source_repository.open_original(self.source_image, source_path)
-                self.source_background_panel.set_candidate_state(False, "Original source is active")
-                self.settings_panel.set_settings(self.model.settings)
-                self._set_image_panel_mode()
-                self._apply_selection_geometry()
-                self.source_viewer.set_image(pil_to_qimage(self.source_image))
-                self._sync_sheet_to_grid()
+                self._clear_all_source_documents()
+                source_entry = None
+                sources = loaded_archive.data.get("sources")
+                if isinstance(sources, list) and sources:
+                    source_entry = next((entry for entry in sources if isinstance(entry, dict) and entry.get("source_id") == loaded_model.source_id), None)
+                record = SourceRecord.from_dict(source_entry) if hasattr(SourceRecord, "from_dict") and isinstance(source_entry, dict) else None
+                document = self._register_image_document(source_path, self.source_image, record=record, settings=self.model.settings)
+                self._activate_image_document(document)
                 self._last_selection = None
                 self.command_stack.clear()
                 self._refresh_all()
@@ -1034,6 +1424,18 @@ class MainWindow(QMainWindow):
             source_type = str(data.get("source_type") or "image")
             video_sources = data.get("video_sources")
             video_entries = video_sources if isinstance(video_sources, list) else []
+            if not video_entries:
+                source_entries = data.get("sources")
+                if isinstance(source_entries, list):
+                    video_entries = [
+                        {
+                            **entry,
+                            "path": entry.get("current_path") or entry.get("original_path"),
+                            "video_settings": entry.get("video_settings") or entry.get("settings", {}),
+                        }
+                        for entry in source_entries
+                        if isinstance(entry, dict) and str(entry.get("source_type") or "") == "video"
+                    ]
             if not video_entries and source_type == "video":
                 source_path_value = data.get("source_path") or data.get("source_image_path")
                 if source_path_value:
@@ -1063,6 +1465,7 @@ class MainWindow(QMainWindow):
                         raise ValueError("Each video source must be an object.")
                     source_path = resolve_project_path(entry.get("path"))
                     metadata = read_video_metadata(source_path)
+                    fingerprint_kind, fingerprint = fingerprint_file(source_path)
                     browser = FrameBrowser()
                     browser.set_metadata(metadata)
                     settings_data = entry.get("video_settings", {})
@@ -1090,6 +1493,9 @@ class MainWindow(QMainWindow):
                         path=source_path,
                         metadata=metadata,
                         browser=browser,
+                        source_id=str(entry.get("source_id") or uuid4().hex),
+                        fingerprint_kind=str(entry.get("fingerprint_kind") or fingerprint_kind),
+                        fingerprint=str(entry.get("fingerprint") or fingerprint),
                         settings=settings,
                         resize_settings=self._resize_overrides_from_project(settings_data),
                     )
@@ -1102,7 +1508,7 @@ class MainWindow(QMainWindow):
                 if first_image is None:
                     raise ValueError("Project does not contain a readable video source.")
 
-                self._clear_video_documents()
+                self._clear_all_source_documents()
                 first_document = documents[0]
                 for document in documents[1:]:
                     document.settings.frame_width = first_document.settings.frame_width
@@ -1135,13 +1541,35 @@ class MainWindow(QMainWindow):
                             tile.source_rect = tuple(int(value) for value in source_rect)
                             tile.source_size = (tile.source_rect[2], tile.source_rect[3])
 
-                self.video_documents = documents
                 for document in documents:
-                    tab_index = self.video_tabs.addTab(document.browser, document.path.name)
-                    self.video_tabs.setTabToolTip(tab_index, str(document.path))
-                self.video_tabs.show()
+                    self._register_video_document(document)
+                source_entries = data.get("sources")
+                if isinstance(source_entries, list):
+                    for entry in source_entries:
+                        if not isinstance(entry, dict) or str(entry.get("source_type") or "") != "image":
+                            continue
+                        source_value = entry.get("current_path") or entry.get("original_path")
+                        if not source_value:
+                            continue
+                        image_path = resolve_project_path(source_value)
+                        record = SourceRecord.from_dict(entry)
+                        with Image.open(image_path) as image:
+                            image_source = image.convert("RGBA")
+                        settings_data = record.settings
+                        image_settings = (
+                            AppSettings.from_dict(settings_data)
+                            if isinstance(settings_data, dict) and settings_data
+                            else AppSettings.from_dict(self._image_settings.to_dict())
+                        )
+                        self._register_image_document(
+                            image_path,
+                            image_source,
+                            record=record,
+                            settings=image_settings,
+                        )
+                self.source_tabs.show()
                 QTimer.singleShot(0, self._initialize_video_frame_splitter)
-                self.video_tabs.setCurrentIndex(0)
+                self.source_tabs.setCurrentIndex(0)
                 self._activate_video_document(first_document, show_frame=False)
                 self.model.source_type = "video"
                 self.model.source_image_path = str(first_document.path)
@@ -1162,18 +1590,11 @@ class MainWindow(QMainWindow):
                 source_path_value = data.get("source_path") or data.get("source_image_path")
                 source_path = resolve_project_path(source_path_value)
                 with Image.open(source_path) as image:
-                    self.source_image = image.convert("RGBA")
+                    loaded_image = image.convert("RGBA")
                 self._source_preview_override = None
-                self._clear_video_documents()
-                self.source_repository.open_original(self.source_image, source_path)
-                self.source_background_panel.set_candidate_state(False, "Original source is active")
-                self.source_type = "image"
-                self.video_source_path = None
-                self.video_metadata = None
-                self.video_settings = VideoSettings()
-                self._video_resize_settings = {}
-                self._video_frame_cache = {}
-                self._video_background_detected = False
+                self._clear_all_source_documents()
+                document = self._register_image_document(source_path, loaded_image)
+                self.source_image = loaded_image
                 normalized_data = dict(data)
                 normalized_data["source_image_path"] = str(source_path)
                 normalized_tiles = []
@@ -1185,11 +1606,13 @@ class MainWindow(QMainWindow):
                         normalized_tiles.append(normalized_tile)
                 normalized_data["tiles"] = normalized_tiles
                 if "source_type" not in data and "source_path" not in data:
-                    load_legacy_project_into_model(normalized_data, self.source_image, self.model)
+                    load_legacy_project_into_model(normalized_data, loaded_image, self.model)
                 else:
-                    self.model.load_project_data(normalized_data, self.source_image)
+                    self.model.load_project_data(normalized_data, loaded_image)
                 self.model.source_type = "image"
                 self.model.source_image_path = str(source_path)
+                document.settings = self.model.settings
+                self._activate_image_document(document)
         except Exception as exc:
             QMessageBox.critical(self, "Load project failed", str(exc))
             return
@@ -1370,6 +1793,7 @@ class MainWindow(QMainWindow):
             "rect": tuple(int(value) for value in rect),
             "description": description,
             "clear_selection": clear_selection_on_success,
+            "source_id": self._active_source_id(),
             "before": clone_tiles(self.model.tiles),
             "source_fingerprint": source_asset.fingerprint if source_asset is not None else None,
             "source_revision_id": self.source_repository.document.active_revision_id,
@@ -1400,6 +1824,10 @@ class MainWindow(QMainWindow):
         self._pending_tile_add = None
         self.settings_panel.set_tile_job_running(False)
         if pending is None or not isinstance(image, Image.Image) or self.source_image is None:
+            self._refresh_all(selected_index=self.bucket_panel.current_index())
+            return
+        if pending.get("source_id") != self._active_source_id():
+            self.statusBar().showMessage("Tile result discarded because the source tab changed.")
             self._refresh_all(selected_index=self.bucket_panel.current_index())
             return
         source_asset = self.source_repository.document.source_asset
@@ -1652,15 +2080,16 @@ class MainWindow(QMainWindow):
             return
 
         source_path = str(document.path)
+        source_key = (document.source_id, document.fingerprint)
         existing_indices = {
-            (tile.source_path, tile.source_frame_index)
+            ((tile.source_id or tile.source_path), tile.source_fingerprint, tile.source_frame_index)
             for tile in self.model.tiles
             if tile.source_type == "video" and tile.source_frame_index is not None
         }
         new_refs = [
             ref
             for ref in refs
-            if (source_path, ref.index) not in existing_indices
+            if (source_key[0], source_key[1], ref.index) not in existing_indices
         ]
         if not new_refs:
             self.statusBar().showMessage("The selected frame is already in the bucket." if len(refs) == 1 else "All selected frames are already in the bucket.")
@@ -1696,6 +2125,9 @@ class MainWindow(QMainWindow):
                 frames,
                 crop_rect=crop_rect,
                 source_path=source_path,
+                source_id=document.source_id,
+                source_fingerprint_kind=document.fingerprint_kind,
+                source_fingerprint=document.fingerprint,
                 resize_settings_by_frame={
                     ref.index: resize_settings for ref in new_refs
                 },

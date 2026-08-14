@@ -54,7 +54,9 @@ def save_project_archive(
         target = target.with_suffix(".sscproj")
     target.parent.mkdir(parents=True, exist_ok=True)
     manifest = dict(data)
-    manifest["schema_version"] = SCHEMA_VERSION
+    # Keep bare legacy manifests on their historical schema. New workspace
+    # manifests always carry an explicit source registry and use schema 4.
+    manifest["schema_version"] = SCHEMA_VERSION if "sources" in manifest else 3
     manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
     if len(manifest_bytes) > MAX_MANIFEST_BYTES:
         raise ValueError("Project manifest is too large.")
@@ -112,7 +114,7 @@ def load_project_archive(path: str | Path) -> LoadedProjectArchive:
         if not isinstance(data, dict):
             raise ValueError("Project manifest must be an object.")
         source_version = int(data.get("schema_version", 0))
-        if source_version not in {2, SCHEMA_VERSION}:
+        if source_version not in {2, 3, SCHEMA_VERSION}:
             raise ValueError(f"Unsupported project schema: {data.get('schema_version')}")
         data = migrate_project_data(data)
         tile_refs = data.get("tiles", [])

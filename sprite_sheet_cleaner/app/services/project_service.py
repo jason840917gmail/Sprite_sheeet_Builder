@@ -12,9 +12,13 @@ from sprite_sheet_cleaner.app.core.tile_transform import render_tile_transform
 from sprite_sheet_cleaner.app.storage.project_archive import LoadedProjectArchive, load_project_archive, save_project_archive
 
 
-def _model_archive_data(model: ProjectModel) -> dict[str, object]:
-    data = model.to_project_data()
-    data["schema_version"] = 3
+def _model_archive_data(
+    model: ProjectModel,
+    *,
+    project_data: dict[str, object] | None = None,
+) -> dict[str, object]:
+    data = dict(project_data or model.to_project_data())
+    data["schema_version"] = 4
     data["tiles"] = [
         {
             "tile_id": tile.tile_id,
@@ -23,10 +27,13 @@ def _model_archive_data(model: ProjectModel) -> dict[str, object]:
             "source_size": list(tile.source_size),
             "final_size": list(tile.final_size),
             "source_revision_id": tile.source_revision_id,
+            "source_id": tile.source_id,
             "source_type": tile.source_type,
             "source_frame_index": tile.source_frame_index,
             "source_timestamp_ms": tile.source_timestamp_ms,
             "source_path": tile.source_path,
+            "source_fingerprint_kind": tile.source_fingerprint_kind,
+            "source_fingerprint": tile.source_fingerprint,
             "resize_size": list(tile.resize_size) if tile.resize_size is not None else None,
             "resize_mode": tile.resize_mode,
             "transform": tile.transform.to_dict(),
@@ -36,8 +43,13 @@ def _model_archive_data(model: ProjectModel) -> dict[str, object]:
     return data
 
 
-def save_model_project(path: str | Path, model: ProjectModel) -> Path:
-    data = _model_archive_data(model)
+def save_model_project(
+    path: str | Path,
+    model: ProjectModel,
+    *,
+    project_data: dict[str, object] | None = None,
+) -> Path:
+    data = _model_archive_data(model, project_data=project_data)
     images = {tile.tile_id: tile.base_image_rgba for tile in model.tiles}
     return save_project_archive(path, data, images)
 
@@ -83,6 +95,7 @@ def load_model_project(path: str | Path, model: ProjectModel) -> LoadedProjectAr
                 image_rgba=rendered,
                 tile_id=tile_id,
                 source_revision_id=(str(tile_data["source_revision_id"]) if tile_data.get("source_revision_id") else None),
+                source_id=(str(tile_data["source_id"]) if tile_data.get("source_id") else None),
                 source_type=str(tile_data.get("source_type") or "image"),
                 source_frame_index=(
                     int(tile_data["source_frame_index"])
@@ -95,6 +108,14 @@ def load_model_project(path: str | Path, model: ProjectModel) -> LoadedProjectAr
                     else None
                 ),
                 source_path=(str(tile_data["source_path"]) if tile_data.get("source_path") else None),
+                source_fingerprint_kind=(
+                    str(tile_data["source_fingerprint_kind"])
+                    if tile_data.get("source_fingerprint_kind")
+                    else None
+                ),
+                source_fingerprint=(
+                    str(tile_data["source_fingerprint"]) if tile_data.get("source_fingerprint") else None
+                ),
                 resize_size=(
                     (int(tile_data["resize_size"][0]), int(tile_data["resize_size"][1]))
                     if isinstance(tile_data.get("resize_size"), (list, tuple))
@@ -111,5 +132,10 @@ def load_model_project(path: str | Path, model: ProjectModel) -> LoadedProjectAr
     model.source_type = str(data.get("source_type") or "image")
     model.video_metadata = data.get("video_metadata") if isinstance(data.get("video_metadata"), dict) else None
     model.video_settings = data.get("video_settings") if isinstance(data.get("video_settings"), dict) else None
+    model.source_id = str(data.get("source_id")) if data.get("source_id") else None
+    model.source_fingerprint_kind = (
+        str(data.get("source_fingerprint_kind")) if data.get("source_fingerprint_kind") else None
+    )
+    model.source_fingerprint = str(data.get("source_fingerprint")) if data.get("source_fingerprint") else None
     model.tiles = rebuilt
     return loaded

@@ -9,7 +9,7 @@ from sprite_sheet_cleaner.app.models.tile_snapshot import TileSnapshot
 
 @dataclass(slots=True)
 class ProjectDocument:
-    schema_version: int = 2
+    schema_version: int = 4
     source_asset: SourceAsset | None = None
     revisions: dict[str, SourceRevision] = field(default_factory=dict)
     active_revision_id: str | None = None

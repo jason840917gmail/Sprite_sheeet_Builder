@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MAX_ENTRIES = 20_000
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_ENTRY_BYTES = 256 * 1024 * 1024

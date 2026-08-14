@@ -96,7 +96,10 @@ def export_metadata(
                 ],
                 "source_rect": list(tile.source_rect),
                 "source_type": tile.source_type,
+                "source_id": tile.source_id,
                 "source_path": tile.source_path,
+                "source_fingerprint_kind": tile.source_fingerprint_kind,
+                "source_fingerprint": tile.source_fingerprint,
                 "source_frame_index": tile.source_frame_index,
                 "source_timestamp_ms": tile.source_timestamp_ms,
                 "resize_size": list(tile.resize_size) if tile.resize_size is not None else None,
@@ -105,7 +108,7 @@ def export_metadata(
         )
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_path": source_path,
         "video_metadata": video_metadata,
         "video_sources": video_sources,

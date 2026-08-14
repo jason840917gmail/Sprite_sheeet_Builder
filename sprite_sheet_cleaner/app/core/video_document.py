@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 from PIL import Image
 
@@ -16,6 +17,9 @@ class VideoDocument:
     path: Path
     metadata: VideoMetadata
     browser: FrameBrowser
+    source_id: str = field(default_factory=lambda: uuid4().hex)
+    fingerprint_kind: str | None = None
+    fingerprint: str | None = None
     settings: VideoSettings = field(default_factory=VideoSettings)
     resize_settings: dict[int, FrameResizeSettings] = field(default_factory=dict)
     frame_cache: dict[int, Image.Image] = field(default_factory=dict)
