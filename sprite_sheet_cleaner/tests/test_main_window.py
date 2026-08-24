@@ -61,6 +61,35 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(settings.background_color, (96, 0, 240))
         self.assertEqual(settings.tolerance, 64)
 
+    def test_image_tabs_share_right_panel_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_path = Path(temp_dir) / "first.png"
+            second_path = Path(temp_dir) / "second.png"
+            Image.new("RGBA", (16, 16), (255, 0, 0, 255)).save(first_path)
+            Image.new("RGBA", (16, 16), (0, 255, 0, 255)).save(second_path)
+
+            window = MainWindow()
+            try:
+                window._load_source_image(first_path, clear_tiles=True)
+                window.settings_panel.tile_width.setValue(7)
+                window.settings_panel.bucket_tile_width.setValue(11)
+                window.settings_panel.sheet_columns.setValue(5)
+
+                window._load_source_image(second_path, clear_tiles=False)
+                self.assertEqual(window.settings_panel.tile_width.value(), 7)
+                self.assertEqual(window.settings_panel.bucket_tile_width.value(), 11)
+                self.assertEqual(window.settings_panel.sheet_columns.value(), 5)
+
+                window.source_tabs.setCurrentIndex(0)
+                self.assertEqual(window.settings_panel.tile_width.value(), 7)
+                self.assertEqual(window.settings_panel.bucket_tile_width.value(), 11)
+                self.assertEqual(window.settings_panel.sheet_columns.value(), 5)
+                self.assertTrue(
+                    all(document.settings.tile_width == 7 for document in window.image_documents.values())
+                )
+            finally:
+                window.close()
+
     def test_clear_bucket_button_removes_all_tiles(self) -> None:
         image = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
         for x in range(4):

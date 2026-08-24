@@ -634,14 +634,20 @@ class MainWindow(QMainWindow):
         document = self._source_documents.get(source_id) if source_id else None
         if not isinstance(document, ImageDocument):
             return
-        document.settings = AppSettings.from_dict(self.model.settings.to_dict())
-        document.record.settings = document.settings.to_dict()
         document.record.view_state = {
             "selection_rect": list(self.source_viewer.selection_rect()) if self.source_viewer.selection_rect() else None,
             "grid_origin": list(self.source_viewer.grid_origin()),
             "tool": self.source_viewer.current_tool(),
             "zoom": self._last_zoom,
         }
+
+    def _sync_shared_image_settings(self, settings: AppSettings) -> None:
+        """Keep the image right panel authoritative across every image tab."""
+        shared = AppSettings.from_dict(settings.to_dict())
+        self._image_settings = shared
+        for document in self.image_documents.values():
+            document.settings = AppSettings.from_dict(shared.to_dict())
+            document.record.settings = document.settings.to_dict()
 
     def _activate_image_document(self, document: ImageDocument) -> None:
         self._bucket_preview_active = False
@@ -666,8 +672,9 @@ class MainWindow(QMainWindow):
         self.model.source_fingerprint = document.record.current_fingerprint or document.record.original_fingerprint
         self.model.video_metadata = None
         self.model.video_settings = None
-        self.model.settings = AppSettings.from_dict(document.settings.to_dict())
-        self._image_settings = self.model.settings
+        self.model.settings = AppSettings.from_dict(self._image_settings.to_dict())
+        document.settings = AppSettings.from_dict(self._image_settings.to_dict())
+        document.record.settings = document.settings.to_dict()
         self.settings_panel.set_settings(self.model.settings)
         self._set_image_panel_mode()
         self.video_frame_stack.hide()
@@ -1044,7 +1051,7 @@ class MainWindow(QMainWindow):
         self._reset_retouch_state()
         self.source_viewer.set_image(pil_to_qimage(self.source_image))
         self.model.settings.remove_background = False
-        self._image_settings = self.model.settings
+        self._sync_shared_image_settings(self.model.settings)
         self.settings_panel.set_settings(self.model.settings)
         self.source_background_panel.set_candidate_state(False, f"Revision {revision.revision_id[:8]} is active.")
         self.statusBar().showMessage("Activated processed source; existing bucket tiles were not changed.")
@@ -1622,7 +1629,7 @@ class MainWindow(QMainWindow):
             if active_document is not None:
                 self._set_video_panel_mode(active_document)
         else:
-            self._image_settings = self.model.settings
+            self._sync_shared_image_settings(self.model.settings)
             self.settings_panel.set_settings(self._image_settings)
             self._set_image_panel_mode()
         self._apply_selection_geometry()
@@ -1658,7 +1665,6 @@ class MainWindow(QMainWindow):
             settings.padding,
             settings.anchor,
         )
-        self._image_settings = settings
         self.model.settings = settings
         self._apply_selection_geometry()
         self._sync_sheet_to_grid()
@@ -1683,6 +1689,7 @@ class MainWindow(QMainWindow):
                 self.model.reprocess_tiles(self.source_image)
             except Exception as exc:
                 QMessageBox.warning(self, "Settings update failed", str(exc))
+        self._sync_shared_image_settings(self.model.settings)
         self._refresh_all(selected_index=self.bucket_panel.current_index())
 
     def _video_settings_changed(self, settings: VideoSettings) -> None:
@@ -1945,8 +1952,8 @@ class MainWindow(QMainWindow):
     def _tile_processing_changed(self, settings: AppSettings) -> None:
         if self.source_type == "video":
             return
-        self._image_settings = settings
         self.model.settings = settings
+        self._sync_shared_image_settings(settings)
         self._refresh_action_context()
         self.statusBar().showMessage("Tile processing settings updated for new image tiles.")
 
@@ -3021,7 +3028,7 @@ class MainWindow(QMainWindow):
             return
         if self.command_stack.undo():
             if self.source_type == "image":
-                self._image_settings = self.model.settings
+                self._sync_shared_image_settings(self.model.settings)
                 self.settings_panel.set_settings(self.model.settings)
                 self._apply_selection_geometry()
             self._refresh_all(selected_index=self.bucket_panel.current_index())
@@ -3031,7 +3038,7 @@ class MainWindow(QMainWindow):
             return
         if self.command_stack.redo():
             if self.source_type == "image":
-                self._image_settings = self.model.settings
+                self._sync_shared_image_settings(self.model.settings)
                 self.settings_panel.set_settings(self.model.settings)
                 self._apply_selection_geometry()
             self._refresh_all(selected_index=self.bucket_panel.current_index())
